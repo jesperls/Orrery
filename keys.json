@@ -1,0 +1,19 @@
+{
+  "layout:orrery": {
+    "alt-space": "orrery.toggle-launcher",
+    "alt-t": "orrery.tile-all",
+    "alt-m": "orrery.minimize-all",
+    "alt-o": "orrery.toggle-mode",
+    "alt-f": "orrery.open-fleet",
+    "alt-e": "orrery.open-files",
+    "alt-g": "orrery.open-changes",
+    "alt-n": "orrery.open-notes",
+    "alt--": "orrery.zoom-out",
+    "alt-=": "orrery.zoom-in",
+    "alt-0": "orrery.zoom-reset",
+    "alt-up": "agent.prev",
+    "alt-down": "agent.next",
+    "ctrl-shift-g": "orrery.open-changes",
+    "cmd-shift-g": "orrery.open-changes"
+  }
+}

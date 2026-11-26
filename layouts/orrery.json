@@ -1,0 +1,106 @@
+{
+  "id": "root",
+  "type": "stack",
+  "active": "cosmos",
+  "titlebar": "none",
+  "traffic_lights": [12, 8],
+  "theme": "orrery",
+  "font": "JetBrains Mono",
+  "font_size": 14,
+  "ui_font": "JetBrains Mono",
+  "terminal_padding": [12, 10],
+  "terminal_opacity": 1,
+  "background": "canvas",
+  "preview": "layouts/orrery.svg",
+  "toast": "orrery-toast",
+  "terminal_menu": "orrery-menu",
+  "divider": { "width": 1, "color": "border" },
+  "children": [
+    {
+      "id": "cosmos",
+      "type": "block",
+      "background": "canvas",
+      "content": {
+        "mod": "orrery",
+        "props": { "role": "universe" }
+      }
+    },
+    {
+      "id": "focus",
+      "type": "column",
+      "background": "background",
+      "children": [
+        {
+          "id": "topbar",
+          "type": "block",
+          "size": { "px": 28 },
+          "min": 28,
+          "max": 28,
+          "window_drag": true,
+          "background": "chrome",
+          "content": {
+            "mod": "orrery",
+            "props": { "role": "topbar" }
+          }
+        },
+        {
+          "id": "focus-body",
+          "type": "row",
+          "size": { "weight": 1 },
+          "background": "background",
+          "children": [
+            {
+              "id": "main",
+              "type": "block",
+              "size": { "weight": 1 },
+              "content": {
+                "tab": "active",
+                "pane": {
+                  "gap": 4,
+                  "radius": 0,
+                  "background": "background",
+                  "lone": true,
+                  "border": { "width": 1, "color": "border" },
+                  "focus": { "width": 1, "color": "accent" },
+                  "header": {
+                    "content": {
+                      "mod": "orrery",
+                      "props": { "role": "pane" }
+                    },
+                    "height": 22,
+                    "position": "top",
+                    "reveal": "always"
+                  }
+                }
+              }
+            },
+            {
+              "id": "side-drawer",
+              "type": "stack",
+              "size": { "px": 320 },
+              "min": 200,
+              "max": 560,
+              "hidden": true,
+              "active": "side-files",
+              "background": "surface",
+              "children": [
+                {
+                  "id": "side-files",
+                  "type": "block",
+                  "background": "surface",
+                  "content": { "mod": "files" }
+                },
+                {
+                  "id": "side-changes",
+                  "type": "block",
+                  "background": "surface",
+                  "content": { "mod": "changes" }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
