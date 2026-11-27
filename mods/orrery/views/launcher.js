@@ -30,6 +30,7 @@ import {
   MONO,
   noteTitle,
   openAddMachineDialog,
+  openLaunchAgentDialog,
   openNoteWindow,
   openTerminalWindow,
   openToolWindow,
@@ -42,6 +43,7 @@ import {
   readOpenWins,
   spaceDisplayName,
   statusColor,
+  terminalDisplayName,
   tileAllOpenWindows,
   TOOL_META,
   TOOL_ORDER,
@@ -92,7 +94,7 @@ export function renderLauncher(view, _cx) {
     openWindowItems.push({
       kind: "terminal",
       id: addr,
-      name: ag ? agentName(ag) : cleanAgentName(tm?.program?.name || tm?.name || "shell"),
+      name: terminalDisplayName(addr, { ag, term: tm, allSpaces }),
       sub: sp ? spaceDisplayName(sp) : ag?.space_name || "",
       status: ag?.status || tm?.status || "idle",
       pinned: Boolean(ag?.pinned),
@@ -806,17 +808,26 @@ export function renderLauncher(view, _cx) {
                         .bg(withAlpha(accent, "2E"))
                         .text_color(t.foreground || "#e4dfd3")
                     )
-                    .tooltip(`Launch ${prog.name} in ${activeSpaceLabel}`)
+                    .tooltip(`Click: name & launch ${prog.name} in ${activeSpaceLabel} · Shift+click: instant launch`)
                     .on_mouse_down("left", stopProp)
-                    .on_click((_e, c) => {
+                    .on_click((e, c) => {
                       c.stop_propagation();
                       dismiss();
-                      dispatchCosmosAction({
-                        type: "spawn-terminal",
-                        spaceId: activeSpace?.id || "",
-                        argv: prog.run,
-                        name: prog.name,
-                      });
+                      if (e?.modifiers?.shift) {
+                        dispatchCosmosAction({
+                          type: "spawn-terminal",
+                          spaceId: activeSpace?.id || "",
+                          argv: prog.run,
+                          name: prog.name,
+                        });
+                      } else {
+                        openLaunchAgentDialog({
+                          spaceId: activeSpace?.id || "",
+                          preselectKey: prog.key,
+                          preselectName: prog.name,
+                          preselectArgv: prog.run,
+                        });
+                      }
                     })
                     .child(`+ ${prog.name}`)
                 )

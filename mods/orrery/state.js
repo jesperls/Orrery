@@ -46,6 +46,8 @@ export const PENDING_ACTION_KEY = "orrery.pendingAction";
 export const CAM_RESET_KEY = "orrery.camReset";
 export const CAM_KEY = "orrery.cam";
 export const SPACE_POS_KEY = "orrery.spacePos";
+export const AGENT_NAMES_KEY = "orrery.agentNames";
+export const LAST_AGENT_KEY = "orrery.lastAgent";
 
 export const MIN_ZOOM = 0.30;
 export const MAX_ZOOM = 1.0;
@@ -197,7 +199,6 @@ export function ensureMenuButtonOnTop(vpW, vpH) {
   const overlayId = openOverlay({
     kind: "window",
     frame: "none",
-    key: `orrery-menu-btn-${targetY}`,
     keep: false,
     width: MENU_BTN_W,
     height: MENU_BTN_H,
@@ -348,32 +349,43 @@ export function openContextPopup(spec = {}) {
   } else if (kind === "note") {
     width = 196;
     estH = 112;
+  } else if (kind === "agent") {
+    width = 236;
+    estH = 264;
   } else if (kind === "taskbar") {
     width = 224;
-    estH = spec.targetKind === "terminal" ? 280 : spec.targetKind === "note" ? 182 : 146;
+    estH = spec.targetKind === "terminal" ? 312 : spec.targetKind === "note" ? 182 : 146;
   } else {
     width = 258;
     const isMoved = Boolean(
       (spec.camX || 0) !== 0 || (spec.camY || 0) !== 0 || (spec.zoom && Math.abs(spec.zoom - 1) > 0.01)
     );
-    estH = Math.min(vpH - 24, isMoved ? 426 : 394);
+    estH = Math.min(vpH - 24, isMoved ? 454 : 422);
   }
 
   width = Math.min(width, Math.max(180, vpW - 16));
   estH = Math.min(estH, Math.max(96, vpH - 20));
 
-  const rawX = Math.round(spec.x ?? vpW / 2);
-  const rawY = Math.round(spec.y ?? vpH / 2);
+  const hasCoords =
+    typeof spec.x === "number" &&
+    Number.isFinite(spec.x) &&
+    typeof spec.y === "number" &&
+    Number.isFinite(spec.y);
+  const topM = getTopSafeMargin();
+  const rawX = Math.round(hasCoords ? spec.x : vpW / 2);
+  const rawY = Math.round(hasCoords ? spec.y : vpH / 2);
 
-  const clampedX = Math.max(8, Math.min(vpW - width - 8, rawX));
-  const clampedY = Math.max(8, Math.min(vpH - barH - estH - 8, rawY));
+  const clampedX = Math.max(8, Math.min(Math.max(8, vpW - width - 8), rawX));
+  const clampedY = Math.max(topM, Math.min(Math.max(topM, vpH - barH - estH - 8), rawY));
 
-  const overlayId = openOverlay({
+  // Use exact clamped window coordinates from e.position whenever available; otherwise omit `at`
+  // so Herdr uses its default pointer anchor (matching shipped mods).
+  const overlaySpec = {
     kind: "popup",
     frame: "none",
     width,
     height: estH,
-    at: "pointer",
+    ...(hasCoords ? { at: { x: clampedX, y: clampedY } } : {}),
     mod: "orrery",
     props: {
       role: "ctxmenu",
@@ -383,13 +395,14 @@ export function openContextPopup(spec = {}) {
       noteId: spec.noteId || "",
       targetKind: spec.targetKind || "",
       targetId: spec.targetId || "",
-      clickX: typeof spec.x === "number" ? Math.round(spec.x) : clampedX,
-      clickY: typeof spec.y === "number" ? Math.round(spec.y) : clampedY,
+      clickX: hasCoords ? rawX : clampedX,
+      clickY: hasCoords ? rawY : clampedY,
       camX: typeof spec.camX === "number" ? Math.round(spec.camX) : 0,
       camY: typeof spec.camY === "number" ? Math.round(spec.camY) : 0,
       zoom: typeof spec.zoom === "number" ? spec.zoom : 1,
     },
-  });
+  };
+  const overlayId = openOverlay(overlaySpec);
 
   if (overlayId) {
     setShared(CTX_POPUP_KEY, overlayId);
@@ -1229,13 +1242,33 @@ export function pruneDeadState() {
     if (notesChanged) setShared(OPEN_NOTES_KEY, nextNotes);
   }
 
-  // 3. Prune dead agents from module-scope elapsed maps
+  // 3. Prune dead agents from module-scope elapsed maps & custom agent names
   const liveAgentAddrs = new Set((agents() || []).map((a) => a?.address).filter(Boolean));
   for (const addr of agentSeenAt.keys()) {
     if (!liveAgentAddrs.has(addr)) agentSeenAt.delete(addr);
   }
   for (const addr of agentStatusSig.keys()) {
     if (!liveAgentAddrs.has(addr)) agentStatusSig.delete(addr);
+  }
+
+  const rawNames = shared(AGENT_NAMES_KEY);
+  if (rawNames && typeof rawNames === "object" && !Array.isArray(rawNames)) {
+    const liveTermAddrs = new Set([
+      ...(terminals() || []).map((t) => t?.address).filter(Boolean),
+      ...(panes() || []).map((p) => p?.terminal).filter(Boolean),
+      ...liveAgentAddrs,
+    ]);
+    let namesChanged = false;
+    const nextNames = {};
+    for (const [addr, val] of Object.entries(rawNames)) {
+      const mach = terminalMachineOf(addr);
+      if ((loadingMachines.has(mach) || liveTermAddrs.has(addr)) && typeof val === "string" && val.trim()) {
+        nextNames[addr] = val.trim();
+      } else {
+        namesChanged = true;
+      }
+    }
+    if (namesChanged) setShared(AGENT_NAMES_KEY, nextNames);
   }
 }
 
@@ -1505,11 +1538,19 @@ function openTerminalWindowDirect(addr, opts = {}) {
   const winW = clamped.width;
   const winH = clamped.height;
 
-  // Preserve opts.wx/wy ONLY when screen position wasn't altered by clampWindowRect
+  // When syncing camera (`preserveWorld`), NEVER mutate a window's stored world coordinates or size!
   const worldPos = screenToWorld(at.x, at.y, { camX: cam.camX, camY: cam.camY, zoom: z });
   const wasClamped = Math.abs(at.x - Math.round(rawX)) > 2 || Math.abs(at.y - Math.round(rawY)) > 2;
-  const wx = hasExplicitRect && hasExplicitWorldPos && !wasClamped ? Math.round(opts.wx) : worldPos.x;
-  const wy = hasExplicitRect && hasExplicitWorldPos && !wasClamped ? Math.round(opts.wy) : worldPos.y;
+  const wx = opts.preserveWorld && hasExplicitWorldPos
+    ? Math.round(opts.wx)
+    : hasExplicitRect && hasExplicitWorldPos && !wasClamped
+      ? Math.round(opts.wx)
+      : worldPos.x;
+  const wy = opts.preserveWorld && hasExplicitWorldPos
+    ? Math.round(opts.wy)
+    : hasExplicitRect && hasExplicitWorldPos && !wasClamped
+      ? Math.round(opts.wy)
+      : worldPos.y;
   const worldW =
     typeof opts.worldW === "number"
       ? Math.round(opts.worldW)
@@ -1539,16 +1580,14 @@ function openTerminalWindowDirect(addr, opts = {}) {
         ? worldH
         : prev?.baseH || Math.round(worldH / scale);
 
-  let overlayKey = prev?.key || `orrery-term-${addr}`;
-  if (forceMove || !prev || !prev.overlayId) {
-    for (const oldId of new Set([prev?.overlayId, opts.overlayId].filter(Boolean))) {
-      try {
-        closeOverlay(oldId);
-      } catch (_err) {
-        // Ignore already-closed overlay
-      }
+  // Always close any previous live overlay before mounting a replacement (no `key` -> no stale windows.json override!)
+  const overlayKey = `orrery-term-${addr}`;
+  for (const oldId of new Set([prev?.overlayId, opts.overlayId].filter(Boolean))) {
+    try {
+      closeOverlay(oldId);
+    } catch (_err) {
+      // Ignore already-closed overlay
     }
-    overlayKey = `orrery-term-${addr}-${nextWinGen()}`;
   }
 
   const isFocusedTerm = Boolean(
@@ -1588,7 +1627,6 @@ function openTerminalWindowDirect(addr, opts = {}) {
   const overlayId = openOverlay({
     kind: "window",
     frame: "none",
-    key: overlayKey,
     keep: false,
     width: winW,
     height: winH,
@@ -1987,8 +2025,14 @@ export function openToolWindow(kind, vpW, vpH, opts = {}) {
 
   const worldPos = screenToWorld(x, y, { camX: cam.camX, camY: cam.camY, zoom: z });
   const wasClamped = Math.abs(x - Math.round(rawX)) > 2 || Math.abs(y - Math.round(rawY)) > 2;
-  const wx = typeof opts.wx === "number" && !wasClamped ? Math.round(opts.wx) : worldPos.x;
-  const wy = typeof opts.wy === "number" && !wasClamped ? Math.round(opts.wy) : worldPos.y;
+  const wx =
+    typeof opts.wx === "number" && (opts.preserveWorld || !wasClamped)
+      ? Math.round(opts.wx)
+      : worldPos.x;
+  const wy =
+    typeof opts.wy === "number" && (opts.preserveWorld || !wasClamped)
+      ? Math.round(opts.wy)
+      : worldPos.y;
   const worldW =
     typeof opts.worldW === "number"
       ? Math.round(opts.worldW)
@@ -2015,16 +2059,15 @@ export function openToolWindow(kind, vpW, vpH, opts = {}) {
         ? worldH
         : prev?.baseH || Math.round(worldH / scale);
 
-  const prevId = opts.overlayId || prev?.overlayId || null;
-  if (prevId) {
+  for (const oldId of new Set([opts.overlayId, prev?.overlayId].filter(Boolean))) {
     try {
-      closeOverlay(prevId);
+      closeOverlay(oldId);
     } catch (_err) {
       // Ignore already-closed overlay
     }
   }
 
-  const overlayKey = `orrery-tool-${tool}-${nextWinGen()}`;
+  const overlayKey = `orrery-tool-${tool}`;
 
   if (z < LIVE_ZOOM_MIN && !opts.forceNativeOverlay && !isFocusMode()) {
     tools[tool] = {
@@ -2051,7 +2094,6 @@ export function openToolWindow(kind, vpW, vpH, opts = {}) {
   const overlayId = openOverlay({
     kind: "window",
     frame: "none",
-    key: overlayKey,
     keep: false,
     width,
     height,
@@ -2218,8 +2260,14 @@ export function openNoteWindow(noteId, opts = {}) {
 
   const worldPos = screenToWorld(x, y, { camX: cam.camX, camY: cam.camY, zoom: z });
   const wasClamped = Math.abs(x - Math.round(rawX)) > 2 || Math.abs(y - Math.round(rawY)) > 2;
-  const wx = typeof opts.wx === "number" && !wasClamped ? Math.round(opts.wx) : worldPos.x;
-  const wy = typeof opts.wy === "number" && !wasClamped ? Math.round(opts.wy) : worldPos.y;
+  const wx =
+    typeof opts.wx === "number" && (opts.preserveWorld || !wasClamped)
+      ? Math.round(opts.wx)
+      : worldPos.x;
+  const wy =
+    typeof opts.wy === "number" && (opts.preserveWorld || !wasClamped)
+      ? Math.round(opts.wy)
+      : worldPos.y;
   const worldW =
     typeof opts.worldW === "number"
       ? Math.round(opts.worldW)
@@ -2246,16 +2294,15 @@ export function openNoteWindow(noteId, opts = {}) {
         ? worldH
         : prev?.baseH || Math.round(worldH / scale);
 
-  const prevId = opts.overlayId || prev?.overlayId || null;
-  if (prevId) {
+  for (const oldId of new Set([opts.overlayId, prev?.overlayId].filter(Boolean))) {
     try {
-      closeOverlay(prevId);
+      closeOverlay(oldId);
     } catch (_err) {
       // Ignore already-closed overlay
     }
   }
 
-  const overlayKey = `orrery-note-${noteId}-${nextWinGen()}`;
+  const overlayKey = `orrery-note-${noteId}`;
 
   if (z < LIVE_ZOOM_MIN && !opts.forceNativeOverlay && !isFocusMode()) {
     openNotes[noteId] = {
@@ -2282,7 +2329,6 @@ export function openNoteWindow(noteId, opts = {}) {
   const overlayId = openOverlay({
     kind: "window",
     frame: "none",
-    key: overlayKey,
     keep: false,
     width,
     height,
@@ -2661,9 +2707,11 @@ export function suspendAllLiveOverlays() {
   if (notesChanged) setShared(OPEN_NOTES_KEY, openNotes);
 }
 
+// Strict safe-viewport check (zero slack): live overlays ONLY mount when they fit cleanly
+// at their exact projected `(sx, sy)` without any clamping jump or world-coordinate drift!
 function fitsCleanlyInView(sx, sy, sw, sh, vpW, vpH) {
-  const slack = 28;
-  return sx >= -slack && sy >= -slack && sx + sw <= vpW + slack && sy + sh <= vpH + slack;
+  const topM = getTopSafeMargin();
+  return sx >= 8 && sy >= topM && sx + sw <= vpW - 8 && sy + sh <= vpH - 8;
 }
 
 export function syncLiveOverlaysToCamera(cam, vpW, vpH, opts = {}) {
@@ -2723,11 +2771,12 @@ export function syncLiveOverlaysToCamera(cam, vpW, vpH, opts = {}) {
         height: sh,
         wx: rec.wx,
         wy: rec.wy,
-        worldW: Math.min(rec.width, maxWinW),
-        worldH: Math.min(rec.height, maxWinH),
+        worldW: rec.width,
+        worldH: rec.height,
         baseW: rec.baseW,
         baseH: rec.baseH,
         scale: rec.scale,
+        preserveWorld: true,
         forceMove: true,
         skipFocus: true,
         skipMenuRaise: true,
@@ -2781,11 +2830,12 @@ export function syncLiveOverlaysToCamera(cam, vpW, vpH, opts = {}) {
         height: sh,
         wx: rec.wx,
         wy: rec.wy,
-        worldW: Math.min(rec.width, maxWinW),
-        worldH: Math.min(rec.height, maxWinH),
+        worldW: rec.width,
+        worldH: rec.height,
         baseW: rec.baseW,
         baseH: rec.baseH,
         scale: rec.scale,
+        preserveWorld: true,
         skipMenuRaise: true,
       });
       mountedAny = true;
@@ -2838,11 +2888,12 @@ export function syncLiveOverlaysToCamera(cam, vpW, vpH, opts = {}) {
         height: sh,
         wx: rec.wx,
         wy: rec.wy,
-        worldW: Math.min(rec.width, maxWinW),
-        worldH: Math.min(rec.height, maxWinH),
+        worldW: rec.width,
+        worldH: rec.height,
         baseW: rec.baseW,
         baseH: rec.baseH,
         scale: rec.scale,
+        preserveWorld: true,
         skipMenuRaise: true,
       });
       mountedAny = true;
@@ -3223,6 +3274,9 @@ export function spawnTerminalInSpace(cx, spaceId, opts = {}) {
         terms.find((tm) => tm?.address && !beforeAddrs.has(tm.address) && !tm.parent && terminalMatchesSpace(tm, targetSp));
       const addr = freshPane?.terminal || exactTerm?.address || null;
       if (addr) {
+        if (typeof opts.customName === "string" && opts.customName.trim()) {
+          setAgentCustomName(addr, opts.customName.trim(), { skipTabRename: true, cx: asyncCx });
+        }
         const hint = worldHintNearSpace(resolvedSpaceId);
         openTerminalWindow(addr, { vpW, vpH, ...(hint || {}) });
         asyncCx.notify();
@@ -3251,6 +3305,7 @@ export function spawnNewSpace(cx, opts = {}) {
   if (opts.name) args.name = opts.name;
   if (opts.argv) args.argv = opts.argv;
   if (opts.tab) args.tab = opts.tab;
+  if (opts.task) args.task = opts.task;
   run("space.new", args);
 
   if (isFocusMode() || !cx?.spawn) return;
@@ -3295,6 +3350,9 @@ export function spawnNewSpace(cx, opts = {}) {
       );
       const addr = freshPane?.terminal || exactTerm?.address || findTerminalForSpace(newSpace);
       if (addr) {
+        if (typeof opts.customName === "string" && opts.customName.trim()) {
+          setAgentCustomName(addr, opts.customName.trim(), { skipTabRename: true, cx: asyncCx });
+        }
         const openOpts = { vpW, vpH };
         if (opts.atWorld && typeof opts.atWorld.x === "number" && typeof opts.atWorld.y === "number") {
           openOpts.wx = Math.round(opts.atWorld.x + 170);
@@ -3466,10 +3524,227 @@ export function cleanAgentName(raw) {
   return trimmed;
 }
 
-export function agentName(ag) {
+export function agentProgramName(ag) {
   if (!ag) return "Agent";
   const raw = ag.program?.name || ag.app || ag.title || "Agent";
   return cleanAgentName(raw);
+}
+
+export function readAgentNames() {
+  const raw = shared(AGENT_NAMES_KEY);
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out = {};
+  for (const [addr, val] of Object.entries(raw)) {
+    if (addr && typeof val === "string" && val.trim()) {
+      out[addr] = val.trim();
+    }
+  }
+  return out;
+}
+
+export function getCustomAgentName(addr) {
+  if (!addr) return "";
+  const local = readAgentNames()[addr];
+  if (local) return local;
+  const tm = (terminals() || []).find((x) => x?.address === addr);
+  const lbl = typeof tm?.labels?.["orrery.name"] === "string" ? tm.labels["orrery.name"].trim() : "";
+  return lbl;
+}
+
+export function getLastAgentKey() {
+  const v = shared(LAST_AGENT_KEY);
+  return typeof v === "string" ? v : "";
+}
+
+export function setLastAgentKey(key) {
+  if (typeof key === "string" && key) {
+    setShared(LAST_AGENT_KEY, key);
+  }
+}
+
+export function setAgentCustomName(addr, name, opts = {}) {
+  const trimmed = typeof name === "string" ? name.trim().slice(0, 40) : "";
+
+  if (addr) {
+    const map = readAgentNames();
+    if (trimmed) {
+      map[addr] = trimmed;
+    } else {
+      delete map[addr];
+    }
+    setShared(AGENT_NAMES_KEY, map);
+  }
+
+  // Sync with Herdr's native tab name when this terminal owns a single-pane tab
+  if (!opts.skipTabRename) {
+    const allPanes = panes() || [];
+    const targetPane = addr ? allPanes.find((p) => p?.terminal === addr) || null : null;
+    const targetTabId = opts.tabId || targetPane?.tab || (addr ? (agents() || []).find((a) => a.address === addr)?.tab : "") || "";
+    if (targetTabId) {
+      const siblingCount = allPanes.filter((p) => p?.tab === targetTabId).length;
+      if (siblingCount <= 1) {
+        run("tab.rename", { id: targetTabId, name: trimmed });
+      }
+    }
+  }
+
+  // Persist on the core terminal label so custom names sync across Linux/macOS Herdr clients
+  if (addr && opts.syncLabel !== false) {
+    const syncLabel = async () => {
+      try {
+        await hc(["label", addr, `orrery.name=${trimmed}`]);
+      } catch (_err) {
+        // Ignore transient core label error
+      }
+    };
+    if (opts.cx?.spawn) {
+      opts.cx.spawn(syncLabel);
+    } else {
+      syncLabel();
+    }
+  }
+
+  return trimmed;
+}
+
+const CALLSIGN_POOL = [
+  "vega",
+  "lyra",
+  "orion",
+  "nova",
+  "atlas",
+  "kepler",
+  "rigel",
+  "cygnus",
+  "draco",
+  "polaris",
+  "sirius",
+  "altair",
+  "deneb",
+  "mira",
+  "solis",
+  "halley",
+  "cassini",
+  "voyager",
+  "pioneer",
+  "helios",
+  "aurora",
+  "zenith",
+  "quasar",
+  "pulsar",
+];
+
+export function suggestCallsign(programName = "", usedNames = null) {
+  const used = usedNames instanceof Set ? usedNames : new Set();
+  const candidates = CALLSIGN_POOL.filter((c) => !used.has(c));
+  if (candidates.length > 0) {
+    return candidates[Math.floor(Math.random() * candidates.length)];
+  }
+  const base = cleanAgentName(programName || "agent").toLowerCase().replace(/[^a-z0-9]+/g, "-") || "agent";
+  for (let i = 2; i < 99; i++) {
+    const next = `${base}-${i}`;
+    if (!used.has(next)) return next;
+  }
+  return `${base}-${Math.floor(Math.random() * 90 + 10)}`;
+}
+
+export function agentName(ag, opts = {}) {
+  if (!ag) return "Agent";
+  const custom = ag.address ? getCustomAgentName(ag.address) : "";
+  if (custom) return custom;
+
+  const prog = agentProgramName(ag);
+  const tabName = typeof ag.tab_name === "string" ? ag.tab_name.trim() : "";
+  if (tabName && !/^\d+$/.test(tabName)) {
+    const tab = opts.allSpaces ? findTabForAgent(ag, opts.allSpaces) : null;
+    if (!tab || tab.named) {
+      return tabName;
+    }
+  }
+  return prog;
+}
+
+export function terminalDisplayName(addr, { ag = null, term = null, pane = null, allSpaces = null } = {}) {
+  if (addr) {
+    const custom = getCustomAgentName(addr);
+    if (custom) return custom;
+  }
+  if (ag) return agentName(ag, { allSpaces });
+
+  const tabId = pane?.tab || term?.tab || "";
+  if (tabId) {
+    const spList = allSpaces || spaces() || [];
+    for (const sp of spList) {
+      const tb = (sp?.tabs || []).find((x) => x?.id === tabId);
+      if (tb?.named && typeof tb.name === "string" && tb.name.trim()) {
+        return tb.name.trim();
+      }
+    }
+  }
+  return cleanAgentName(term?.program?.name || pane?.program?.name || term?.name || "shell");
+}
+
+export function openLaunchAgentDialog(opts = {}) {
+  closeLauncherPopup(false);
+  closeContextPopup();
+  const hasMultiSpaces = !opts.machine && (spaces() || []).length > 1;
+  return openOverlay({
+    kind: "dialog",
+    frame: "none",
+    width: 456,
+    height: hasMultiSpaces ? 364 : 316,
+    mod: "orrery",
+    props: {
+      role: "launch-agent",
+      spaceId: opts.spaceId || "",
+      machine: opts.machine || "",
+      preselectKey: opts.preselectKey || "",
+      preselectName: opts.preselectName || "",
+      preselectArgv: Array.isArray(opts.preselectArgv) ? opts.preselectArgv : null,
+      initialName: opts.initialName || "",
+    },
+  });
+}
+
+export function openRenameAgentDialog(opts = {}) {
+  closeLauncherPopup(false);
+  closeContextPopup();
+  const addr = opts.addr || "";
+  const ag = addr ? (agents() || []).find((a) => a.address === addr) || null : null;
+  const tm = addr ? (terminals() || []).find((x) => x.address === addr) || null : null;
+  const pn = addr ? (panes() || []).find((x) => x.terminal === addr) || null : null;
+  const programName =
+    opts.programName ||
+    (ag ? agentProgramName(ag) : cleanAgentName(tm?.program?.name || pn?.program?.name || "Terminal"));
+  const resolvedCurrent =
+    typeof opts.currentName === "string"
+      ? opts.currentName
+      : getCustomAgentName(addr) ||
+        (ag && agentName(ag) !== programName ? agentName(ag) : "") ||
+        (pn?.tab
+          ? (() => {
+              for (const sp of spaces() || []) {
+                const tb = (sp?.tabs || []).find((x) => x?.id === pn.tab);
+                if (tb?.named && tb.name && tb.name !== programName) return tb.name;
+              }
+              return "";
+            })()
+          : "");
+
+  return openOverlay({
+    kind: "dialog",
+    frame: "none",
+    width: 404,
+    height: 194,
+    mod: "orrery",
+    props: {
+      role: "rename-agent",
+      addr,
+      tabId: opts.tabId || ag?.tab || pn?.tab || "",
+      currentName: resolvedCurrent,
+      programName,
+    },
+  });
 }
 
 const STATUS_RANK = {
@@ -3615,13 +3890,15 @@ export function agentActivity(ag, termMap) {
 
 export function agentTooltip(ag, allSpaces, termMap) {
   const loc = agentLocation(ag, allSpaces);
-  const name = agentName(ag);
+  const name = agentName(ag, { allSpaces });
+  const prog = agentProgramName(ag);
+  const titleHead = name.toLowerCase() !== prog.toLowerCase() ? `${name} (${prog})` : name;
   const st = ag?.status || "idle";
   const act = agentActivity(ag, termMap);
   const elapsed = agentElapsed(ag, allSpaces, termMap);
-  const head = [name, elapsed ? `${st} (${elapsed})` : st, loc].filter(Boolean).join(" · ");
+  const head = [titleHead, elapsed ? `${st} (${elapsed})` : st, loc].filter(Boolean).join(" · ");
   const body = act ? `\n${act}` : "";
-  return `${head}${body}\nclick: open window · right-click: peek`;
+  return `${head}${body}\nclick: open window · right-click: agent menu`;
 }
 
 export function spaceTooltip(sp, gitBySpace) {
@@ -4099,6 +4376,8 @@ export function spawnAgentOnMachine(cx, machineName, opts = {}) {
     machine: machineName || "",
     argv: opts.argv,
     tab: opts.name,
+    customName: opts.customName,
+    task: opts.task,
     vpW: opts.vpW,
     vpH: opts.vpH,
   });

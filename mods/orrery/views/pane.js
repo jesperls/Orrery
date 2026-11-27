@@ -4,7 +4,7 @@
 import { div } from "gpui-kit";
 import { h_flex } from "gpui-base";
 import { home, panes, props, run, theme } from "herdr";
-import { cleanAgentName, MONO, statusColor, statusGlyph, withAlpha } from "../state.js";
+import { cleanAgentName, MONO, openRenameAgentDialog, statusColor, statusGlyph, terminalDisplayName, withAlpha } from "../state.js";
 
 function shortPath(cwd) {
   if (!cwd) return "";
@@ -56,11 +56,16 @@ export function renderPane(_cx) {
   const sg = status ? statusGlyph(status) : info.focused ? ">" : "·";
 
   const progName = cleanAgentName(info.program?.name || info.mod || "shell");
+  const displayName = info.terminal
+    ? terminalDisplayName(info.terminal, { pane: info })
+    : progName;
+  const showProgTag = displayName.toLowerCase() !== progName.toLowerCase();
   const pathLabel = shortPath(info.cwd);
   const rawTitle = (info.title || "").trim();
   const showTitle =
     Boolean(rawTitle) &&
     rawTitle.toLowerCase() !== progName.toLowerCase() &&
+    rawTitle.toLowerCase() !== displayName.toLowerCase() &&
     rawTitle !== info.cwd &&
     rawTitle !== pathLabel &&
     !rawTitle.endsWith(pathLabel.replace(/^~/, ""));
@@ -110,7 +115,19 @@ export function renderPane(_cx) {
             .when(info.focused, (fEl) => fEl.font_bold())
             .text_color(info.focused ? t.foreground || "#e4dfd3" : t.muted || "#8b93a6")
             .whitespace_nowrap()
-            .child(progName)
+            .child(displayName)
+        )
+        .when(showProgTag, (el) =>
+          el.child(
+            div()
+              .flex_none()
+              .font_family(MONO)
+              .text_size(10)
+              .line_height("14px")
+              .text_color(t.dim || "#4d5870")
+              .whitespace_nowrap()
+              .child(`[${progName}]`)
+          )
         )
         .when(showTitle, (el) =>
           el.child(
@@ -156,6 +173,13 @@ export function renderPane(_cx) {
         .flex_none()
         .gap(2)
         .items_center()
+        .when(Boolean(info.terminal), (rEl) =>
+          rEl.child(
+            ctrl(`orrery-pren-${info.pane}`, "✎", "rename agent / terminal", t, t.accent || "#e8a849", () =>
+              openRenameAgentDialog({ addr: info.terminal, tabId: info.tab || "" })
+            )
+          )
+        )
         .child(
           ctrl(`orrery-psr-${info.pane}`, "+right", "split right", t, t.done || "#5fd4b8", () =>
             run("pane.split", { pane: info.pane, direction: "right" })

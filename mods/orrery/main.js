@@ -15,7 +15,7 @@
 
 import { View } from "gpui-kit";
 import { EditorState } from "gpui-base";
-import { agents, hc, machines, nextCommand, pickFolder, props, setAgentOrder, spaces } from "herdr";
+import { agents, focused, hc, machines, nextCommand, pickFolder, props, setAgentOrder, spaces } from "herdr";
 import {
   clearContextPopupIfMatch,
   clearLauncherPopupIfMatch,
@@ -32,7 +32,9 @@ import {
   loadKnownAgents,
   machineStatusInfo,
   MONO,
+  openLaunchAgentDialog,
   openOrCreateNoteInView,
+  openRenameAgentDialog,
   openSpaceTerminalAsync,
   openTabTerminalAsync,
   pollGitStatus,
@@ -82,6 +84,12 @@ import { renderFleet } from "./views/fleet.js";
 import { renderNotes } from "./views/notes.js";
 import { renderTopbar } from "./views/topbar.js";
 import { renderPane } from "./views/pane.js";
+import {
+  initAgentDialog,
+  releaseAgentDialog,
+  renderLaunchAgentDialog,
+  renderRenameAgentDialog,
+} from "./views/agentdialog.js";
 
 const DEFAULT_DIMS = {
   universe: { w: 1600, h: 1000 },
@@ -96,6 +104,8 @@ const DEFAULT_DIMS = {
   notes: { w: 440, h: 340 },
   topbar: { w: 1200, h: 28 },
   pane: { w: 960, h: 22 },
+  "launch-agent": { w: 456, h: 340 },
+  "rename-agent": { w: 404, h: 194 },
 };
 
 export default class Orrery extends View {
@@ -228,6 +238,10 @@ export default class Orrery extends View {
         await pollMachinesList();
         asyncCx.notify();
       });
+    }
+
+    if (role === "launch-agent" || role === "rename-agent") {
+      initAgentDialog(this, cx, role, pr);
     }
 
     if (role === "resizer") {
@@ -518,11 +532,24 @@ export default class Orrery extends View {
         spawnTerminalInSpace(asyncCx, action.spaceId || "", {
           argv: action.argv,
           name: action.name,
+          customName: action.customName,
           folder: action.folder,
           task: action.task,
           vpW,
           vpH,
         });
+      } else if (action.type === "launch-agent") {
+        openLaunchAgentDialog({
+          spaceId: action.spaceId || "",
+          machine: action.machine || "",
+          preselectKey: action.preselectKey || "",
+          initialName: action.initialName || "",
+        });
+      } else if (action.type === "rename-agent") {
+        const targetAddr = action.addr || focused()?.terminal || "";
+        if (targetAddr || action.tabId) {
+          openRenameAgentDialog({ addr: targetAddr, tabId: action.tabId || "" });
+        }
       } else if (action.type === "spawn-space") {
         spawnNewSpace(asyncCx, {
           folder: action.folder,
@@ -574,6 +601,8 @@ export default class Orrery extends View {
         spawnAgentOnMachine(asyncCx, action.machine || "", {
           argv: action.argv,
           name: action.name,
+          customName: action.customName,
+          task: action.task,
           vpW,
           vpH,
         });
@@ -753,6 +782,15 @@ export default class Orrery extends View {
             if (!isFocusMode()) {
               openOrCreateNoteInView(vp.w, vp.h, this.camX || 0, this.camY || 0);
             }
+          } else if (cmd === "launch-agent") {
+            const spList = spaces() || [];
+            const activeSp = spList.find((s) => s.active) ?? spList[0] ?? null;
+            openLaunchAgentDialog({ spaceId: activeSp?.id || "" });
+          } else if (cmd === "rename-agent") {
+            const focTerm = focused()?.terminal || "";
+            if (focTerm) {
+              openRenameAgentDialog({ addr: focTerm });
+            }
           } else if (cmd === "zoom-out") {
             if (role === "universe" && !isFocusMode()) {
               applyCameraZoomAt(this, -96, Math.round(vp.w / 2), Math.round(vp.h / 2), asyncCx, 0, {
@@ -835,6 +873,17 @@ export default class Orrery extends View {
       this.editorState = null;
     }
 
+    releaseAgentDialog(this);
+    if (this.inlineNameInput) {
+      try {
+        this.inlineNameInput.release?.();
+      } catch (_err) {
+        // Ignore already released inline input
+      }
+      this.inlineNameInput = null;
+      this.editingInlineName = false;
+    }
+
     for (const fh of ["canvasFocus", "notesFocus", "resizerFocus"]) {
       if (this[fh]) {
         try {
@@ -883,6 +932,8 @@ export default class Orrery extends View {
     if (role === "notes") return renderNotes(this, cx);
     if (role === "topbar") return renderTopbar(this, cx);
     if (role === "pane") return renderPane(cx);
+    if (role === "launch-agent") return renderLaunchAgentDialog(this, cx);
+    if (role === "rename-agent") return renderRenameAgentDialog(this, cx);
     return renderUniverse(this, cx);
   }
 }

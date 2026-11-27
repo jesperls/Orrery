@@ -12,8 +12,10 @@
 
 import { div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
-import { agents, props, run, spaces, terminals, theme } from "herdr";
+import { agents, props, run, spaces, terminals, theme, window as win } from "herdr";
 import {
+  agentName,
+  agentProgramName,
   buildGitBySpace,
   CLEAR,
   closeAndEndTerminal,
@@ -36,8 +38,10 @@ import {
   MONO,
   noteTitle,
   openAddMachineDialog,
+  openLaunchAgentDialog,
   openMachinesSettings,
   openNoteWindow,
+  openRenameAgentDialog,
   openTerminalWindow,
   openToolWindow,
   readGitInfo,
@@ -323,6 +327,28 @@ export function renderCtxmenu(view, _cx) {
                     .child("open")
                 )
               )
+              .child(
+                h_flex()
+                  .id(`orrery-sctx-tab-ren-${tb.id || idx}`)
+                  .w(18)
+                  .h(18)
+                  .items_center()
+                  .justify_center()
+                  .font_family(MONO)
+                  .text_size(10)
+                  .line_height("14px")
+                  .text_color(t.dim || "#4d5870")
+                  .cursor_pointer()
+                  .hover((st) => st.bg(t.hover || "#172236").text_color(accent))
+                  .tooltip("Rename terminal / agent")
+                  .on_mouse_down("left", stopProp)
+                  .on_click((_e, c) => {
+                    c.stop_propagation();
+                    dismiss();
+                    openRenameAgentDialog({ addr: desc.address || "", tabId: tb.id || "" });
+                  })
+                  .child("✎")
+              )
               .when(tabs.length > 1, (xEl) =>
                 xEl.child(
                   h_flex()
@@ -430,17 +456,26 @@ export function renderCtxmenu(view, _cx) {
                         .bg(withAlpha(accent, "2E"))
                         .text_color(t.foreground || "#e4dfd3")
                     )
-                    .tooltip(`Launch ${prog.name} in ${spLabel}`)
+                    .tooltip(`Click: name & launch ${prog.name} in ${spLabel} · Shift+click: instant launch`)
                     .on_mouse_down("left", stopProp)
-                    .on_click((_e, c) => {
+                    .on_click((e, c) => {
                       c.stop_propagation();
                       dismiss();
-                      dispatchCosmosAction({
-                        type: "spawn-terminal",
-                        spaceId: sp.id,
-                        argv: prog.run,
-                        name: prog.name,
-                      });
+                      if (e?.modifiers?.shift) {
+                        dispatchCosmosAction({
+                          type: "spawn-terminal",
+                          spaceId: sp.id,
+                          argv: prog.run,
+                          name: prog.name,
+                        });
+                      } else {
+                        openLaunchAgentDialog({
+                          spaceId: sp.id,
+                          preselectKey: prog.key,
+                          preselectName: prog.name,
+                          preselectArgv: prog.run,
+                        });
+                      }
                     })
                     .child(prog.name)
                 )
@@ -637,16 +672,26 @@ export function renderCtxmenu(view, _cx) {
                       .hover((s) =>
                         s.bg(withAlpha(accent, "2E")).text_color(t.foreground || "#e4dfd3")
                       )
+                      .tooltip(`Click: name & launch ${prog.name} on ${machine.name} · Shift+click: instant launch`)
                       .on_mouse_down("left", stopProp)
-                      .on_click((_e, c) => {
+                      .on_click((e, c) => {
                         c.stop_propagation();
                         dismiss();
-                        dispatchCosmosAction({
-                          type: "spawn-agent-machine",
-                          machine: machine.name,
-                          argv: prog.run,
-                          name: prog.name,
-                        });
+                        if (e?.modifiers?.shift) {
+                          dispatchCosmosAction({
+                            type: "spawn-agent-machine",
+                            machine: machine.name,
+                            argv: prog.run,
+                            name: prog.name,
+                          });
+                        } else {
+                          openLaunchAgentDialog({
+                            machine: machine.name,
+                            preselectKey: prog.key,
+                            preselectName: prog.name,
+                            preselectArgv: prog.run,
+                          });
+                        }
                       })
                       .child(prog.name)
                   )
@@ -791,6 +836,121 @@ export function renderCtxmenu(view, _cx) {
   }
 
   // ============================================================
+  // 2B. ORBITING AGENT SPACECRAFT CONTEXT MENU (`kind: "agent"`)
+  // ============================================================
+  if (kind === "agent") {
+    const addr = p.targetId || "";
+    const allSpaces = spaces() || [];
+    const ag = addr ? (agents() || []).find((a) => a.address === addr) || null : null;
+    const isOpen = Boolean(addr && getOpenWindowAddrSet().has(addr));
+    const displayName = ag ? agentName(ag, { allSpaces }) : addr || "Agent";
+    const progName = ag ? agentProgramName(ag) : "";
+    const subtitle =
+      progName && displayName.toLowerCase() !== progName.toLowerCase()
+        ? `${progName} · ${ag?.status || "idle"}`
+        : ag?.status || "idle";
+    const isMac = (win()?.platform || "linux") === "macos";
+
+    const items = [
+      v_flex()
+        .w_full()
+        .px(12)
+        .pt(3)
+        .pb(6)
+        .gap(2)
+        .border_b_1()
+        .border_color(withAlpha(t.border || "#1f2b40", "CC"))
+        .child(
+          div()
+            .w_full()
+            .font_family(MONO)
+            .text_size(11)
+            .line_height("15px")
+            .font_bold()
+            .text_color(t.foreground || "#e4dfd3")
+            .truncate()
+            .child(displayName)
+        )
+        .child(
+          div()
+            .w_full()
+            .font_family(MONO)
+            .text_size(10)
+            .line_height("13px")
+            .text_color(t.dim || "#4d5870")
+            .truncate()
+            .child(subtitle)
+        ),
+      row(
+        "orrery-actx-open",
+        isOpen ? "Focus Window" : "Open Window",
+        "",
+        { bold: true },
+        () => {
+          dismiss();
+          if (addr) openTerminalWindow(addr, { vpW: vp.w, vpH: vp.h });
+        }
+      ),
+      row(
+        "orrery-actx-rename",
+        "Rename Agent...",
+        isMac ? "⌘⇧R" : "Alt+R",
+        { bold: true, color: accent },
+        () => {
+          dismiss();
+          if (addr) openRenameAgentDialog({ addr });
+        }
+      ),
+      row(
+        "orrery-actx-peek",
+        "Quick Peek",
+        "",
+        {},
+        () => {
+          dismiss();
+          if (addr) run("terminal.peek", { terminal: addr });
+        }
+      ),
+    ];
+
+    if (ag) {
+      items.push(
+        row(
+          "orrery-actx-pin",
+          ag.pinned ? "Unpin Agent" : "Pin Agent",
+          ag.pinned ? "★" : "",
+          { color: ag.pinned ? accent : t.foreground || "#e4dfd3" },
+          () => {
+            dismiss();
+            run("terminal.pin", { terminal: addr, pinned: !ag.pinned });
+            syncAgentOrder();
+          }
+        )
+      );
+    }
+
+    items.push(
+      row("orrery-actx-max", "Maximize Full-Screen", isMac ? "⌘⇧U" : "Alt+O", {}, () => {
+        dismiss();
+        if (addr) enterFocusMode(addr);
+      }),
+      divider(),
+      row(
+        "orrery-actx-close",
+        "Close / End Agent",
+        "",
+        { color: t.blocked || "#f06449", hoverBg: CLOSE_RED, hoverColor: "#ffffff" },
+        () => {
+          dismiss();
+          if (addr) closeAndEndTerminal(addr);
+        }
+      )
+    );
+
+    return frame(items);
+  }
+
+  // ============================================================
   // 3. TASKBAR WINDOW CONTEXT MENU (`kind: "taskbar"`)
   // ============================================================
   if (kind === "taskbar") {
@@ -852,6 +1012,19 @@ export function renderCtxmenu(view, _cx) {
     }
 
     if (isTerm) {
+      const isMac = (win()?.platform || "linux") === "macos";
+      children.push(
+        row(
+          "orrery-tbm-rename",
+          ag ? "Rename Agent..." : "Rename Terminal...",
+          isMac ? "⌘⇧R" : "Alt+R",
+          { color: accent },
+          () => {
+            dismiss();
+            if (targetId) openRenameAgentDialog({ addr: targetId });
+          }
+        )
+      );
       if (ag) {
         children.push(
           row(
@@ -1064,6 +1237,16 @@ export function renderCtxmenu(view, _cx) {
       dismiss();
       dispatchCosmosAction({ type: "spawn-terminal", spaceId: activeSpace?.id || "" });
     }),
+    row(
+      "orrery-ctx-launch-agent",
+      `Launch Agent... (${activeSpaceLabel})`,
+      (win()?.platform || "linux") === "macos" ? "⌘⇧A" : "Alt+A",
+      { color: accent },
+      () => {
+        dismiss();
+        openLaunchAgentDialog({ spaceId: activeSpace?.id || "" });
+      }
+    ),
     row(
       "orrery-ctx-space",
       hasMultipleMachines ? "New Space..." : "New Space (Browse...)",

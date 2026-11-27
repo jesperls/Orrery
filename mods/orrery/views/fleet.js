@@ -27,6 +27,7 @@ import {
   agentElapsed,
   agentLocation,
   agentName,
+  agentProgramName,
   buildGitBySpace,
   cleanAgentName,
   CLEAR,
@@ -43,7 +44,9 @@ import {
   minimizeTerminalWindow,
   MONO,
   openAddMachineDialog,
+  openLaunchAgentDialog,
   openMachinesSettings,
+  openRenameAgentDialog,
   openSpaceTerminalAsync,
   openTerminalWindow,
   readCamera,
@@ -59,6 +62,7 @@ import {
   statusColor,
   statusGlyph,
   syncAgentOrder,
+  terminalDisplayName,
   tileAllOpenWindows,
   withAlpha,
 } from "../state.js";
@@ -670,17 +674,14 @@ export function renderFleet(view, _cx) {
               actionChip(
                 "orrery-fleet-add-agent",
                 "+ agent",
-                "Launch coding agent",
+                "Name & launch coding agent",
                 {
-                  color: view.showAgentPicker ? accent : t.foreground || "#e4dfd3",
-                  border: view.showAgentPicker ? accent : undefined,
+                  color: accent,
+                  border: withAlpha(accent, "88"),
                 },
                 (_e, c) => {
-                  view.showAgentPicker = !view.showAgentPicker;
-                  if (view.showAgentPicker) {
-                    view.showNewSpace = false;
-                    loadKnownAgents(view, c, activeSpace?.machine ?? null);
-                  }
+                  view.showNewSpace = false;
+                  openLaunchAgentDialog({ spaceId: activeSpace?.id || "" });
                   c.notify();
                 }
               )
@@ -1245,7 +1246,22 @@ export function renderFleet(view, _cx) {
                                   .font_bold()
                                   .text_color(t.foreground || "#e4dfd3")
                                   .whitespace_nowrap()
-                                  .child(agentName(ag))
+                                  .child(agentName(ag, { allSpaces }))
+                              )
+                              .when(
+                                agentName(ag, { allSpaces }).toLowerCase() !==
+                                  agentProgramName(ag).toLowerCase(),
+                                (prEl) =>
+                                  prEl.child(
+                                    div()
+                                      .flex_none()
+                                      .font_family(MONO)
+                                      .text_size(10)
+                                      .line_height("14px")
+                                      .text_color(t.dim || "#4d5870")
+                                      .whitespace_nowrap()
+                                      .child(`[${agentProgramName(ag)}]`)
+                                  )
                               )
                               .when(Boolean(ag.pinned), (pEl) =>
                                 pEl.child(
@@ -1326,6 +1342,15 @@ export function renderFleet(view, _cx) {
                                 }
                                 c.notify();
                               }
+                            )
+                          )
+                          .child(
+                            actionChip(
+                              `orrery-fl-ren-${ag.address || idx}`,
+                              "rename",
+                              "Rename agent callsign",
+                              { color: t.muted || "#8b93a6" },
+                              () => openRenameAgentDialog({ addr: ag.address })
                             )
                           )
                           .child(
@@ -1417,7 +1442,7 @@ export function renderFleet(view, _cx) {
                 const isOpen = openAddrs.has(tm.address);
                 const isFocused = foc?.terminal === tm.address;
                 const rawName = tm.program?.name || tm.name || "shell";
-                const shellName = rawName === "shell" ? "shell" : cleanAgentName(rawName);
+                const shellName = terminalDisplayName(tm.address, { term: tm, allSpaces });
                 const sp = tm.space ? spaceMap.get(tm.space) || null : null;
                 const spName = sp ? spaceDisplayName(sp) : "";
                 const sc = statusColor(tm.status || "idle", t);
@@ -1513,6 +1538,15 @@ export function renderFleet(view, _cx) {
                             }
                             c.notify();
                           }
+                        )
+                      )
+                      .child(
+                        actionChip(
+                          `orrery-fl-sh-ren-${tm.address || idx}`,
+                          "rename",
+                          "Rename terminal",
+                          { color: t.muted || "#8b93a6" },
+                          () => openRenameAgentDialog({ addr: tm.address })
                         )
                       )
                       .child(

@@ -7,13 +7,13 @@
 //   - Right buttons : ─ (minimize) · □ (maximize) · × (close; 3s ×? confirm on active agents)
 
 import { div } from "gpui-kit";
-import { h_flex } from "gpui-base";
+import { h_flex, Input, InputState } from "gpui-base";
 import { agents, focused, openOverlay, panes, props, run, spaces, terminals, theme, window as win } from "herdr";
 import {
-  agentName,
-  cleanAgentName,
+  agentProgramName,
   closeAndEndTerminal,
   enterFocusMode,
+  getCustomAgentName,
   getViewportDims,
   getWindowDimensions,
   getWindowScale,
@@ -23,8 +23,10 @@ import {
   readGitInfo,
   resetWindowScale,
   scaleWindowByFactor,
+  setAgentCustomName,
   statusColor,
   statusGlyph,
+  terminalDisplayName,
   withAlpha,
 } from "../state.js";
 
@@ -61,9 +63,94 @@ export function renderWinbar(view, _cx) {
   const sg = statusGlyph(status);
   const isActiveAgent = Boolean(ag) && (status === "working" || status === "blocked");
 
-  const label = ag
-    ? agentName(ag)
-    : cleanAgentName(term?.program?.name || paneInfo?.program?.name || term?.name || "shell");
+  const label = terminalDisplayName(addr, { ag, term, pane: paneInfo, allSpaces });
+  const progLabel = ag ? agentProgramName(ag) : "";
+  const showProgTag = Boolean(progLabel && label.toLowerCase() !== progLabel.toLowerCase());
+  const isEditingName = Boolean(view.editingInlineName && view.inlineNameInput);
+
+  const finishInlineRename = (save, c) => {
+    if (!view.editingInlineName) return;
+    const inp = view.inlineNameInput;
+    const nextVal = save && inp ? inp.value() : null;
+    view._inlineClosing = true;
+    view.editingInlineName = false;
+    view.inlineNameInput = null;
+    if (inp) {
+      try {
+        inp.release?.();
+      } catch (_err) {
+        // ignore
+      }
+    }
+    view._inlineClosing = false;
+    if (save && addr) {
+      setAgentCustomName(addr, nextVal ?? "", { cx: c });
+    }
+    if (addr) {
+      run("pane.focus", { terminal: addr });
+    }
+    c?.notify?.();
+  };
+
+  const startInlineRename = (c) => {
+    if (!addr) return;
+    view._pendingMove = null;
+    view.lastTitleClickMs = 0;
+    if (view.inlineNameInput) {
+      try {
+        view.inlineNameInput.release?.();
+      } catch (_err) {
+        // ignore
+      }
+      view.inlineNameInput = null;
+    }
+    const existing = getCustomAgentName(addr) || (showProgTag ? label : "");
+    const inp = InputState.new({
+      placeholder: progLabel || "name",
+      value: existing,
+    });
+    if (existing.length > 0) {
+      try {
+        inp.set_selected_range({ start: 0, end: existing.length });
+      } catch (_err) {
+        // ignore
+      }
+    }
+    inp.on("submit", (_ev, evCx) => {
+      finishInlineRename(true, evCx);
+    });
+    inp.on("blur", (_ev, evCx) => {
+      if (
+        !view._inlineClosing &&
+        view.editingInlineName &&
+        Date.now() - (view._inlineStartedAt || 0) > 160
+      ) {
+        finishInlineRename(true, evCx);
+      }
+    });
+    view._inlineStartedAt = Date.now();
+    view.inlineNameInput = inp;
+    view.editingInlineName = true;
+    try {
+      inp.focus();
+    } catch (_err) {
+      // ignore
+    }
+    if (c?.timer?.after) {
+      view._trackTimer?.(
+        c.timer.after(24, () => {
+          if (!view._closed && view.editingInlineName && view.inlineNameInput === inp) {
+            try {
+              inp.focus();
+            } catch (_err) {
+              // ignore
+            }
+          }
+        })
+      );
+    }
+    c?.notify?.();
+  };
 
   const spaceName = sp ? (sp.machine ? `${sp.machine}:${sp.name || "space"}` : sp.name || "space") : "";
   const branch =
@@ -211,12 +298,18 @@ export function renderWinbar(view, _cx) {
           const hasLocal =
             typeof e?.local_position?.x === "number" && typeof e?.local_position?.y === "number";
           const stored = getWindowDimensions("terminal", addr, 800, 600);
-          const winX = hasLocal
-            ? Math.max(0, Math.round(mx - e.local_position.x - FRAME_INSET - 10))
-            : stored.rec?.x ?? Math.max(8, Math.round(mx - 120));
-          const winY = hasLocal
-            ? Math.max(0, Math.round(my - e.local_position.y - FRAME_INSET))
-            : stored.rec?.y ?? Math.max(8, Math.round(my - 15));
+          const winX =
+            typeof stored.rec?.x === "number"
+              ? stored.rec.x
+              : hasLocal
+                ? Math.max(0, Math.round(mx - e.local_position.x - FRAME_INSET - 10))
+                : Math.max(8, Math.round(mx - 120));
+          const winY =
+            typeof stored.rec?.y === "number"
+              ? stored.rec.y
+              : hasLocal
+                ? Math.max(0, Math.round(my - e.local_position.y - FRAME_INSET))
+                : Math.max(8, Math.round(my - 15));
 
           view._pendingMove = {
             winX,
@@ -265,7 +358,7 @@ export function renderWinbar(view, _cx) {
         .on_mouse_up("left", () => {
           view._pendingMove = null;
         })
-        .on_mouse_down("right", (_e, c) => {
+        .on_mouse_down("right", (e, c) => {
           c.stop_propagation();
           view._pendingMove = null;
           if (!addr) return;
@@ -274,7 +367,8 @@ export function renderWinbar(view, _cx) {
             kind: "taskbar",
             targetKind: "terminal",
             targetId: addr,
-            atPointer: true,
+            x: e?.position?.x,
+            y: e?.position?.y,
             vpW: vp.w,
             vpH: vp.h,
           });
@@ -308,17 +402,78 @@ export function renderWinbar(view, _cx) {
               .child("★")
           )
         )
-        .child(
-          div()
-            .min_w(0)
-            .max_w(160)
-            .font_family(MONO)
-            .text_size(11)
-            .line_height("15px")
-            .when(isFocused, (fEl) => fEl.font_bold())
-            .text_color(isFocused ? t.foreground || "#e4dfd3" : t.muted || "#8b93a6")
-            .truncate()
-            .child(label)
+        .when(isEditingName, (edEl) =>
+          edEl.child(
+            div()
+              .id(`orrery-wb-edit-wrap-${addr || "t"}`)
+              .flex_none()
+              .w(156)
+              .h(20)
+              .on_mouse_down("left", stopProp)
+              .on_mouse_down("right", stopProp)
+              .on_mouse_down("middle", stopProp)
+              .on_key_down((e, c) => {
+                if (e?.key === "escape" || e?.keystroke === "escape") {
+                  c.stop_propagation();
+                  finishInlineRename(false, c);
+                }
+              })
+              .child(
+                Input.new(view.inlineNameInput)
+                  .w_full()
+                  .h_full()
+                  .px(5)
+                  .bg(t.background || "#070a12")
+                  .border_1()
+                  .border_color(t.accent || "#e8a849")
+                  .font_family(MONO)
+                  .text_size(11)
+                  .text_color(t.foreground || "#e4dfd3")
+              )
+          )
+        )
+        .when(!isEditingName, (lblEl) =>
+          lblEl.child(
+            div()
+              .id(`orrery-wb-name-${addr || "t"}`)
+              .min_w(0)
+              .max_w(180)
+              .px(3)
+              .py(1)
+              .font_family(MONO)
+              .text_size(11)
+              .line_height("15px")
+              .when(isFocused, (fEl) => fEl.font_bold())
+              .text_color(isFocused ? t.foreground || "#e4dfd3" : t.muted || "#8b93a6")
+              .truncate()
+              .cursor_text()
+              .hover((st) =>
+                st
+                  .bg(withAlpha(t.accent || "#e8a849", "1C"))
+                  .text_color(t.accent || "#e8a849")
+              )
+              .tooltip("Click to rename inline · Enter to save · Esc to cancel")
+              .on_mouse_down("left", (e, c) => {
+                c.stop_propagation();
+                view._pendingMove = null;
+                if (e?.click_count === 1) {
+                  startInlineRename(c);
+                }
+              })
+              .child(label)
+          )
+        )
+        .when(showProgTag, (pEl) =>
+          pEl.child(
+            div()
+              .flex_none()
+              .font_family(MONO)
+              .text_size(10)
+              .line_height("14px")
+              .text_color(t.dim || "#4d5870")
+              .whitespace_nowrap()
+              .child(`[${progLabel}]`)
+          )
         )
         .when(Boolean(spaceName), (sEl) =>
           sEl
@@ -389,6 +544,21 @@ export function renderWinbar(view, _cx) {
                 resetWindowScale("terminal", addr, { overlayId });
               })
               .child(`${scalePct}%`)
+          )
+        )
+        .child(
+          winCtrl(
+            "rename",
+            "✎",
+            `Rename ${ag ? "agent" : "terminal"} inline (${modKey === "Cmd" ? "Cmd+Shift+R" : "Alt+R"})`,
+            { width: 28, size: 11, color: isEditingName ? t.accent || "#e8a849" : t.dim || "#4d5870", hoverColor: t.accent || "#e8a849" },
+            (_e, c) => {
+              if (isEditingName) {
+                finishInlineRename(true, c);
+              } else {
+                startInlineRename(c);
+              }
+            }
           )
         )
         .child(

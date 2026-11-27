@@ -67,6 +67,7 @@ import {
   suspendAllLiveOverlays,
   syncLiveOverlaysToCamera,
   tabTooltip,
+  terminalDisplayName,
   tileAllOpenWindows,
   TOOL_META,
   TOOL_ORDER,
@@ -383,7 +384,7 @@ export function applyCameraZoomAt(view, deltaY, anchorX, anchorY, c, deltaX = 0,
   c?.notify?.();
 }
 
-const ORRERY_ALT_KEYS = new Set(["space", "o", "t", "m", "f", "e", "g", "n", "-", "=", "0", "up", "down"]);
+const ORRERY_ALT_KEYS = new Set(["space", "a", "r", "o", "t", "m", "f", "e", "g", "n", "-", "=", "0", "up", "down"]);
 const ORRERY_CTRL_SHIFT_KEYS = new Set(["f", "g", "c"]);
 
 function mapKeyEventToHcKey(e) {
@@ -572,9 +573,7 @@ function buildWorldWindowsList({
     const tm = termMap.get(addr) || null;
     const pn = paneMap.get(addr) || null;
     const sp = (ag?.space || tm?.space) ? spaceMap.get(ag?.space || tm?.space) || null : null;
-    const title = ag
-      ? agentName(ag)
-      : cleanAgentName(tm?.program?.name || pn?.program?.name || tm?.name || "shell");
+    const title = terminalDisplayName(addr, { ag, term: tm, pane: pn, allSpaces });
     const subtitle = sp ? spaceDisplayName(sp) : ag?.space_name || "";
     const branch = pn?.branch || sp?.branch || "";
     const folder = shortFolder(pn?.cwd || sp?.folder || "");
@@ -892,7 +891,8 @@ export function renderUniverse(view, _cx) {
         const sy = rec ? Math.round(rec.wy * z + (view.camY || 0)) : 0;
         const sw = rec ? Math.round((rec.width || 600) * z) : 0;
         const sh = rec ? Math.round((rec.height || 400) * z) : 0;
-        const isClipped = Boolean(rec) && (sx < 12 || sy < 12 || sx + sw > vpW - 12 || sy + sh > vpH - 12);
+        const topSafe = getTopSafeMargin();
+        const isClipped = Boolean(rec) && (sx < 8 || sy < topSafe || sx + sw > vpW - 8 || sy + sh > vpH - 8);
         if (rec && (z < LIVE_ZOOM_MIN || isClipped || rec.suspended || !rec.overlayId)) {
           animateCameraToWindow(view, wd.kind, wd.id, c);
         } else if (wd.kind === "terminal") {
@@ -1015,15 +1015,27 @@ export function renderUniverse(view, _cx) {
       const sy = rec ? Math.round(rec.wy * curZ + (view.camY || 0)) : 0;
       const sw = rec ? Math.round((rec.width || 600) * curZ) : 0;
       const sh = rec ? Math.round((rec.height || 400) * curZ) : 0;
-      const clipped = Boolean(rec) && (sx < 12 || sy < 12 || sx + sw > vpW - 12 || sy + sh > vpH - 12);
+      const topSafe = getTopSafeMargin();
+      const clipped = Boolean(rec) && (sx < 8 || sy < topSafe || sx + sw > vpW - 8 || sy + sh > vpH - 8);
       if (rec && (curZ < LIVE_ZOOM_MIN || clipped || rec.suspended || !rec.overlayId)) {
         animateCameraToWindow(view, "terminal", ag.address, evCx);
       }
       evCx?.notify?.();
     },
-    onAgentRightClick: (ag, _evCx) => {
+    onAgentRightClick: (ag, e, evCx) => {
       if (!ag?.address) return;
-      run("terminal.peek", { terminal: ag.address });
+      evCx?.stop_propagation?.();
+      view.panDrag = null;
+      view.noteDrag = null;
+      view.winCardDrag = null;
+      openContextPopup({
+        kind: "agent",
+        targetId: ag.address,
+        x: e?.position?.x ?? Math.round(vpW / 2),
+        y: e?.position?.y ?? Math.round(vpH / 2),
+        vpW,
+        vpH,
+      });
     },
     onSubAgentClick: (sub, evCx) => {
       dismissPopups();
@@ -1349,7 +1361,7 @@ export function renderUniverse(view, _cx) {
             spaces: allSpaces,
             spacePositions: readSpacePositions(),
             machinesList: remoteMachines,
-            agents: allAgents,
+            agents: allAgents.map((ag) => ({ ...ag, _callsign: agentName(ag, { allSpaces }) })),
             subAgents: allSubAgents,
             activeSpaceId: activeSpace?.id || null,
             focusedTerminal,

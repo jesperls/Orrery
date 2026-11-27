@@ -17,6 +17,7 @@ import {
   MONO,
   openAddMachineDialog,
   openContextPopup,
+  openLaunchAgentDialog,
   readMachinesList,
   sortAgentsByUrgency,
   statusColor,
@@ -595,16 +596,25 @@ export function renderTopbar(view, _cx) {
                             .text_color(t.accent || "#e8a849")
                             .cursor_pointer()
                             .hover((st) => st.text_color(t.foreground || "#e4dfd3"))
-                            .tooltip(`launch ${prog.name} in new tab`)
+                            .tooltip(`click: name & launch ${prog.name} · shift+click: instant launch`)
                             .on_mouse_down("left", stopDrag)
-                            .on_click((_e, c) => {
+                            .on_click((e, c) => {
                               view.showAgentPicker = false;
-                              run(
-                                "tab.new",
-                                activeSpace
-                                  ? { space: activeSpace.id, argv: prog.run, name: prog.name }
-                                  : { argv: prog.run, name: prog.name }
-                              );
+                              if (e?.modifiers?.shift) {
+                                run(
+                                  "tab.new",
+                                  activeSpace
+                                    ? { space: activeSpace.id, argv: prog.run, name: prog.name }
+                                    : { argv: prog.run, name: prog.name }
+                                );
+                              } else {
+                                openLaunchAgentDialog({
+                                  spaceId: activeSpace?.id || "",
+                                  preselectKey: prog.key,
+                                  preselectName: prog.name,
+                                  preselectArgv: prog.run,
+                                });
+                              }
                               c.notify();
                             })
                             .child(prog.name)

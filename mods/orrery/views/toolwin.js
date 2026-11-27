@@ -143,12 +143,18 @@ export function renderToolwin(view, _cx) {
           const hasLocal =
             typeof e?.local_position?.x === "number" && typeof e?.local_position?.y === "number";
           const stored = getWindowDimensions(winKind, targetId, 440, 400);
-          const winX = hasLocal
-            ? Math.max(0, Math.round(mx - e.local_position.x - FRAME_INSET - 10))
-            : stored.rec?.x ?? Math.max(8, Math.round(mx - 120));
-          const winY = hasLocal
-            ? Math.max(0, Math.round(my - e.local_position.y - FRAME_INSET))
-            : stored.rec?.y ?? Math.max(8, Math.round(my - 14));
+          const winX =
+            typeof stored.rec?.x === "number"
+              ? stored.rec.x
+              : hasLocal
+                ? Math.max(0, Math.round(mx - e.local_position.x - FRAME_INSET - 10))
+                : Math.max(8, Math.round(mx - 120));
+          const winY =
+            typeof stored.rec?.y === "number"
+              ? stored.rec.y
+              : hasLocal
+                ? Math.max(0, Math.round(my - e.local_position.y - FRAME_INSET))
+                : Math.max(8, Math.round(my - 14));
 
           view._pendingMove = {
             winX,
@@ -196,7 +202,7 @@ export function renderToolwin(view, _cx) {
         .on_mouse_up("left", () => {
           view._pendingMove = null;
         })
-        .on_mouse_down("right", (_e, c) => {
+        .on_mouse_down("right", (e, c) => {
           c.stop_propagation();
           view._pendingMove = null;
           if (!targetId) return;
@@ -205,7 +211,8 @@ export function renderToolwin(view, _cx) {
             kind: "taskbar",
             targetKind: winKind,
             targetId,
-            atPointer: true,
+            x: e?.position?.x,
+            y: e?.position?.y,
             vpW: vp.w,
             vpH: vp.h,
           });

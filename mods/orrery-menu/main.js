@@ -4,9 +4,11 @@
 
 import { View, div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
-import { agents, closeOverlay, panes, props, run, terminals, theme } from "herdr";
+import { agents, closeOverlay, panes, props, run, setShared, shared, terminals, theme } from "herdr";
 
 const MONO = "JetBrains Mono";
+const AGENT_NAMES_KEY = "orrery.agentNames";
+const PENDING_ACTION_KEY = "orrery.pendingAction";
 
 export default class OrreryMenu extends View {
   render(_cx) {
@@ -18,6 +20,26 @@ export default class OrreryMenu extends View {
     const agent = agents().find((a) => a.address === target.terminal) ?? null;
     const termInfo = terminals().find((x) => x.address === target.terminal) ?? null;
     const isSubAgent = Boolean(termInfo?.parent);
+    const savedNames = shared(AGENT_NAMES_KEY);
+    const customName =
+      (target.terminal && savedNames && typeof savedNames === "object" && typeof savedNames[target.terminal] === "string"
+        ? savedNames[target.terminal].trim()
+        : "") ||
+      (typeof termInfo?.labels?.["orrery.name"] === "string" ? termInfo.labels["orrery.name"].trim() : "") ||
+      (agent?.tab_name && !/^\d+$/.test(String(agent.tab_name).trim()) ? String(agent.tab_name).trim() : "");
+    const headerName =
+      customName || modelPane?.program?.name || termInfo?.program?.name || target.terminal || "terminal";
+
+    const requestRename = () => {
+      if (overlay) closeOverlay(overlay);
+      if (!target.terminal) return;
+      const now = Date.now();
+      const prev = shared(PENDING_ACTION_KEY);
+      const queue = Array.isArray(prev) ? prev.filter((item) => item && now - (item.ts || 0) < 5000) : [];
+      queue.push({ type: "rename-agent", addr: target.terminal, ts: now });
+      setShared(PENDING_ACTION_KEY, queue.slice(-16));
+      run("orrery.run-action");
+    };
 
     const act = (cmd, args) => {
       if (overlay) closeOverlay(overlay);
@@ -82,12 +104,23 @@ export default class OrreryMenu extends View {
           .line_height("15px")
           .text_color(t.muted || "#8b93a6")
           .truncate()
-          .child(`* ${modelPane?.program?.name || termInfo?.program?.name || target.terminal || "terminal"}`)
+          .child(`* ${headerName}`)
       )
       .child(sep())
       .child(row("om-copy", "c", "copy", t.accent || "#e8a849", () => actFocused("terminal.copy")))
       .child(row("om-paste", "v", "paste", t.accent || "#e8a849", () => actFocused("terminal.paste")))
       .child(row("om-search", "/", "search", t.done || "#5fd4b8", () => actFocused("terminal.search")))
+      .when(Boolean(target.terminal), (rEl) =>
+        rEl.child(
+          row(
+            "om-rename",
+            "r",
+            agent ? "rename agent..." : "rename...",
+            t.accent || "#e8a849",
+            requestRename
+          )
+        )
+      )
       .child(
         h_flex()
           .id("om-rclick")

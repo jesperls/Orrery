@@ -163,10 +163,15 @@ function sanitizeId(str) {
 
 function cleanCallsign(ag) {
   if (!ag) return "Agent";
-  const raw = ag.program?.name || ag.app || ag.title || "Agent";
+  const custom = typeof ag._callsign === "string" ? ag._callsign.trim() : "";
+  const tabName =
+    !custom && typeof ag.tab_name === "string" && !/^\d+$/.test(ag.tab_name.trim())
+      ? ag.tab_name.trim()
+      : "";
+  const raw = custom || tabName || ag.program?.name || ag.app || ag.title || "Agent";
   const text = String(raw).trim();
   if (!text) return "Agent";
-  return text.length > 18 ? `${text.slice(0, 17)}~` : text;
+  return text.length > 20 ? `${text.slice(0, 19)}~` : text;
 }
 
 function cleanSpaceName(sp) {
@@ -3348,9 +3353,9 @@ function renderAgentCraft(ag, orbitIdx, centerPos, isOpen, pal, handlers, z = 1.
     .on_mouse_down("left", (_e, cx) => {
       cx.stop_propagation();
     })
-    .on_mouse_down("right", (_e, cx) => {
+    .on_mouse_down("right", (e, cx) => {
       cx.stop_propagation();
-      if (handlers?.onAgentRightClick) handlers.onAgentRightClick(ag, cx);
+      if (handlers?.onAgentRightClick) handlers.onAgentRightClick(ag, e, cx);
     })
     .on_click((_e, cx) => {
       cx.stop_propagation();
