@@ -30,12 +30,14 @@ import {
   findDefaultTerminal,
   focusNextBlocked,
   formatClockHHMM,
+  getTopSafeMargin,
   getWorldBounds,
   groupSubAgents,
   isFocusMode,
   isNoteVisible,
   LIVE_ZOOM_MIN,
   machineStatusInfo,
+  MIN_ZOOM,
   MONO,
   moveNoteObject,
   moveWorldWindowCoords,
@@ -113,10 +115,11 @@ function computeControlledWindowTarget(view, rec, vpW, vpH) {
   const startZoom = typeof view.zoom === "number" && Number.isFinite(view.zoom) ? view.zoom : 1.0;
   const startCamX = view.camX || 0;
   const startCamY = view.camY || 0;
+  const topSafe = getTopSafeMargin();
   const wx = rec.wx || 0;
   const wy = rec.wy || 0;
-  const ww = Math.max(220, rec.width || 600);
-  const wh = Math.max(140, rec.height || 400);
+  const ww = Math.min(Math.max(220, vpW - 16), Math.max(220, rec.width || 600));
+  const wh = Math.min(Math.max(140, vpH - topSafe - 8), Math.max(140, rec.height || 400));
   const twx = wx + ww / 2;
   const twy = wy + wh / 2;
 
@@ -127,7 +130,8 @@ function computeControlledWindowTarget(view, rec, vpW, vpH) {
   let idealCamY = scy0 - twy;
 
   const marginX = Math.max(16, Math.min(36, Math.floor((vpW - ww) / 4)));
-  const marginY = Math.max(16, Math.min(36, Math.floor((vpH - wh) / 4)));
+  const marginTop = Math.max(topSafe, Math.min(36, Math.floor((vpH - wh) / 4)));
+  const marginBot = Math.max(16, Math.min(36, Math.floor((vpH - wh) / 4)));
 
   if (ww <= vpW - marginX * 2) {
     const left = idealCamX + wx;
@@ -138,13 +142,13 @@ function computeControlledWindowTarget(view, rec, vpW, vpH) {
     idealCamX = vpW / 2 - twx;
   }
 
-  if (wh <= vpH - marginY * 2) {
+  if (wh <= vpH - marginTop - marginBot) {
     const top = idealCamY + wy;
     const bottom = top + wh;
-    if (top < marginY) idealCamY += marginY - top;
-    else if (bottom > vpH - marginY) idealCamY -= bottom - (vpH - marginY);
+    if (top < marginTop) idealCamY += marginTop - top;
+    else if (bottom > vpH - marginBot) idealCamY -= bottom - (vpH - marginBot);
   } else {
-    idealCamY = vpH / 2 - twy;
+    idealCamY = Math.max(topSafe, (vpH - wh) / 2) - wy;
   }
 
   const target = clampCameraToBounds(idealCamX, idealCamY, 1.0, vpW, vpH, { snapToOne: true });
@@ -261,9 +265,58 @@ function scheduleCameraSync(view, c, delayMs = 180) {
   }
 }
 
-export function applyCameraZoomAt(view, deltaY, anchorX, anchorY, c, deltaX = 0) {
+export function applyCameraZoomAt(view, deltaY, anchorX, anchorY, c, deltaX = 0, opts = {}) {
   const dy = typeof deltaY === "number" && Number.isFinite(deltaY) ? deltaY : 0;
   const dx = typeof deltaX === "number" && Number.isFinite(deltaX) ? deltaX : 0;
+  const isTrackpad = Boolean(opts?.isTrackpad);
+  const touchPhase = typeof opts?.touchPhase === "string" ? opts.touchPhase : "";
+  const forceMode = opts?.forceMode === "zoom" || opts?.forceMode === "pan" ? opts.forceMode : null;
+
+  // Track smooth trackpad gesture sequences: axis-lock per gesture so diagonal two-finger
+  // swipes on macOS never flip mid-stroke between zoom and pan, and filter post-lift inertia tails.
+  let gestureMode = forceMode;
+  let fastSettle = false;
+  if (isTrackpad) {
+    const now = Date.now();
+    if (!view._wheelGesture) {
+      view._wheelGesture = { mode: null, lastAt: 0, accX: 0, accY: 0, endedAt: 0 };
+    }
+    const g = view._wheelGesture;
+    if (touchPhase === "started" || now - g.lastAt > 200) {
+      g.mode = null;
+      g.accX = 0;
+      g.accY = 0;
+      g.endedAt = 0;
+    }
+    g.lastAt = now;
+
+    if (touchPhase === "ended" || touchPhase === "cancelled") {
+      g.endedAt = now;
+      fastSettle = true;
+      if (Math.abs(dy) < 1.5 && Math.abs(dx) < 1.5) {
+        if (view._camSyncTimer) scheduleCameraSync(view, c, 90);
+        return;
+      }
+    } else if (g.endedAt > 0 && now - g.endedAt > 0) {
+      // macOS post-lift momentum tail: drop tiny decaying ticks so live terminals remount promptly
+      fastSettle = true;
+      if (Math.abs(dy) < 1.5 && Math.abs(dx) < 1.5) return;
+    }
+
+    if (forceMode) {
+      g.mode = forceMode;
+    } else if (!g.mode) {
+      g.accX += Math.abs(dx);
+      g.accY += Math.abs(dy);
+      if (g.accX + g.accY >= 5) {
+        g.mode = g.accX > g.accY * 1.45 ? "pan" : "zoom";
+      }
+    }
+    gestureMode = g.mode || (Math.abs(dx) > Math.abs(dy) * 1.45 ? "pan" : "zoom");
+  } else if (!gestureMode) {
+    gestureMode = Math.abs(dx) > Math.abs(dy) * 1.25 && Math.abs(dx) >= 0.01 ? "pan" : "zoom";
+  }
+
   if (Math.abs(dy) < 0.01 && Math.abs(dx) < 0.01) return;
 
   const oldZoom = typeof view.zoom === "number" && Number.isFinite(view.zoom) ? view.zoom : 1.0;
@@ -272,10 +325,11 @@ export function applyCameraZoomAt(view, deltaY, anchorX, anchorY, c, deltaX = 0)
   const vpW = Math.max(480, view.vpW || 1600);
   const vpH = Math.max(320, view.vpH || 1000);
 
-  // Dominant horizontal scroll (trackpad two-finger horizontal swipe or Shift+Scroll) pans smoothly
-  if (Math.abs(dx) > Math.abs(dy) * 1.25 && Math.abs(dx) >= 0.01) {
+  // Horizontal pan mode (trackpad two-finger horizontal swipe or Shift+Scroll)
+  if (gestureMode === "pan") {
+    if (Math.abs(dx) < 0.01 && (!isTrackpad || Math.abs(dy) < 0.01)) return;
     const panDX = Math.max(-240, Math.min(240, dx)) * 1.15;
-    const panDY = Math.max(-240, Math.min(240, dy)) * 1.15;
+    const panDY = isTrackpad ? Math.max(-240, Math.min(240, dy)) * 1.15 : 0;
     const clamped = clampCameraToBounds(oldCamX + panDX, oldCamY + panDY, oldZoom, vpW, vpH, {
       snapToOne: false,
     });
@@ -286,19 +340,20 @@ export function applyCameraZoomAt(view, deltaY, anchorX, anchorY, c, deltaX = 0)
     suspendAllLiveOverlays();
     view.camX = clamped.camX;
     view.camY = clamped.camY;
-    scheduleCameraSync(view, c, 180);
+    scheduleCameraSync(view, c, fastSettle ? 100 : 160);
     c?.notify?.();
     return;
   }
 
   if (Math.abs(dy) < 0.01) return;
 
-  // Continuous proportional zoom tuned for both discrete mouse wheels and fractional touchpad deltas
+  // Continuous proportional zoom tuned for both discrete mouse wheels and 120Hz smooth trackpads
   const clampedDy = Math.max(-240, Math.min(240, dy));
-  const factor = Math.exp(clampedDy * 0.0022);
+  const sensitivity = isTrackpad ? 0.0032 : 0.0022;
+  const factor = Math.exp(clampedDy * sensitivity);
   const zoomingIn = dy > 0;
   const newZoom = clampZoom(oldZoom * factor, zoomingIn);
-  if (Math.abs(newZoom - oldZoom) < 0.0008) return;
+  if (Math.abs(newZoom - oldZoom) < 0.0001) return;
 
   const mx = typeof anchorX === "number" ? anchorX : Math.round(vpW / 2);
   const my = typeof anchorY === "number" ? anchorY : Math.round(vpH / 2);
@@ -323,7 +378,8 @@ export function applyCameraZoomAt(view, deltaY, anchorX, anchorY, c, deltaX = 0)
     view.activeZoomTerm = null;
   }
 
-  scheduleCameraSync(view, c, clamped.zoom >= LIVE_ZOOM_MIN ? 220 : 180);
+  const settleDelay = fastSettle ? 110 : clamped.zoom >= LIVE_ZOOM_MIN ? 180 : 150;
+  scheduleCameraSync(view, c, settleDelay);
   c?.notify?.();
 }
 
@@ -890,11 +946,29 @@ export function renderUniverse(view, _cx) {
     onWheel: (e, evCx) => {
       const dy = typeof e?.delta?.y === "number" ? e.delta.y : 0;
       const dx = typeof e?.delta?.x === "number" ? e.delta.x : 0;
-      if (Math.abs(dy) < 0.01 && Math.abs(dx) < 0.01) return;
-      if (e?.modifiers?.shift && Math.abs(dx) < 0.01) {
-        applyCameraZoomAt(view, 0, e?.position?.x, e?.position?.y, evCx, dy);
+      const isTrackpad = !e?.delta_lines;
+      const touchPhase = typeof e?.touch_phase === "string" ? e.touch_phase : "";
+      const mods = e?.modifiers || {};
+      if (Math.abs(dy) < 0.01 && Math.abs(dx) < 0.01 && touchPhase !== "ended" && touchPhase !== "cancelled") {
+        return;
+      }
+      if (mods.control || mods.platform) {
+        applyCameraZoomAt(view, dy, e?.position?.x, e?.position?.y, evCx, 0, {
+          isTrackpad,
+          touchPhase,
+          forceMode: "zoom",
+        });
+      } else if (mods.shift && Math.abs(dx) < 0.01) {
+        applyCameraZoomAt(view, 0, e?.position?.x, e?.position?.y, evCx, dy, {
+          isTrackpad,
+          touchPhase,
+          forceMode: "pan",
+        });
       } else {
-        applyCameraZoomAt(view, dy, e?.position?.x, e?.position?.y, evCx, dx);
+        applyCameraZoomAt(view, dy, e?.position?.x, e?.position?.y, evCx, dx, {
+          isTrackpad,
+          touchPhase,
+        });
       }
     },
     onSpaceClick: (sp, evCx) => {
@@ -1212,6 +1286,7 @@ export function renderUniverse(view, _cx) {
         view.camY = clamped.camY;
         view.zoom = clamped.zoom;
         ensureMenuButtonOnTop(sz.width, sz.height);
+        scheduleCameraSync(view, sizeCx, 120);
       }
 
       // Smart 1-shot auto-open on first real measure ONLY when zero persisted windows exist
@@ -1326,22 +1401,74 @@ export function renderUniverse(view, _cx) {
               .child(`! ${blockedCount}`)
           )
         )
-        .when(isMoved, (zEl) =>
-          zEl.child(
-            hudBtn(
-              "orrery-hud-zoom-reset",
-              zoomPct !== 100 ? `${zoomPct}% · reset` : "reset view",
-              "Reset cosmos zoom & pan to 100% home (or double-click space)",
-              (_e, c) => {
-                dismissPopups();
-                resetCameraHome(view, c);
-              },
-              {
-                color: t.done || "#5fd4b8",
-                borderColor: withAlpha(t.done || "#5fd4b8", "66"),
-              }
+        .child(
+          h_flex()
+            .id("orrery-hud-zoom-group")
+            .flex_none()
+            .items_center()
+            .bg(withAlpha(t.chrome || "#090d17", "A8"))
+            .border_1()
+            .border_color(
+              isMoved
+                ? withAlpha(t.done || "#5fd4b8", "66")
+                : withAlpha(t.border || "#1f2b40", "AA")
             )
-          )
+            .child(
+              hudBtn(
+                "orrery-hud-zoom-out",
+                "−",
+                `Zoom out cosmos (${w.platform === "macos" ? "Cmd+Shift+-" : "Alt+-"} or scroll)`,
+                (_e, c) => {
+                  dismissPopups();
+                  applyCameraZoomAt(view, -96, Math.round(vpW / 2), Math.round(vpH / 2), c, 0, {
+                    forceMode: "zoom",
+                  });
+                },
+                {
+                  px: 6,
+                  bg: CLEAR,
+                  color: zoom <= MIN_ZOOM + 0.005 ? t.dim || "#4d5870" : t.muted || "#8b93a6",
+                }
+              )
+            )
+            .child(
+              hudBtn(
+                "orrery-hud-zoom-reset",
+                isMoved ? `${zoomPct}% · reset` : `${zoomPct}%`,
+                isMoved
+                  ? `Reset cosmos zoom & pan to 100% home (${w.platform === "macos" ? "Cmd+Shift+0" : "Alt+0"} or double-click space)`
+                  : `Cosmos zoom 100% · click − / + or two-finger scroll empty space`,
+                (_e, c) => {
+                  dismissPopups();
+                  if (isMoved) {
+                    resetCameraHome(view, c);
+                  }
+                },
+                {
+                  px: 6,
+                  bg: CLEAR,
+                  color: isMoved ? t.done || "#5fd4b8" : t.dim || "#4d5870",
+                }
+              )
+            )
+            .child(
+              hudBtn(
+                "orrery-hud-zoom-in",
+                "+",
+                `Zoom in cosmos (${w.platform === "macos" ? "Cmd+Shift+=" : "Alt+="} or scroll)`,
+                (_e, c) => {
+                  dismissPopups();
+                  applyCameraZoomAt(view, 96, Math.round(vpW / 2), Math.round(vpH / 2), c, 0, {
+                    forceMode: "zoom",
+                  });
+                },
+                {
+                  px: 6,
+                  bg: CLEAR,
+                  color: zoom >= LIVE_ZOOM_MIN ? t.dim || "#4d5870" : t.muted || "#8b93a6",
+                }
+              )
+            )
         )
         .when(remoteMachines.length > 0, (mEl) =>
           mEl.child(

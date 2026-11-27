@@ -11,6 +11,7 @@ import {
   applyWindowMove,
   applyWindowResize,
   CLEAR,
+  getTopSafeMargin,
   getViewportDims,
   MONO,
   withAlpha,
@@ -41,16 +42,17 @@ function computePreviewRect(view, p, overridePos = null) {
   const mode = p.mode === "move" ? "move" : "resize";
   const dir = typeof p.dir === "string" && p.dir ? p.dir : "se";
 
+  const topM = getTopSafeMargin();
   const startX =
     typeof p.winX === "number" && Number.isFinite(p.winX)
       ? Math.max(EDGE_MARGIN, Math.round(p.winX))
       : EDGE_MARGIN;
   const startY =
     typeof p.winY === "number" && Number.isFinite(p.winY)
-      ? Math.max(EDGE_MARGIN, Math.round(p.winY))
-      : EDGE_MARGIN;
+      ? Math.max(topM, Math.round(p.winY))
+      : topM;
   const maxAllowedW = Math.max(minW, vpW - EDGE_MARGIN * 2);
-  const maxAllowedH = Math.max(minH, vpH - EDGE_MARGIN * 2);
+  const maxAllowedH = Math.max(minH, vpH - topM - EDGE_MARGIN);
   const startW = Math.max(minW, Math.min(maxAllowedW, Math.round(p.startW || 600)));
   const startH = Math.max(minH, Math.min(maxAllowedH, Math.round(p.startH || 400)));
   const startMX = typeof p.startMouseX === "number" ? p.startMouseX : 0;
@@ -73,11 +75,11 @@ function computePreviewRect(view, p, overridePos = null) {
   const dy = curMY - startMY;
   const movedDist = Math.hypot(dx, dy);
   const maxRight = Math.max(EDGE_MARGIN + minW, vpW - EDGE_MARGIN);
-  const maxBottom = Math.max(EDGE_MARGIN + minH, vpH - EDGE_MARGIN);
+  const maxBottom = Math.max(topM + minH, vpH - EDGE_MARGIN);
 
   if (mode === "move") {
     const newX = Math.max(EDGE_MARGIN, Math.min(Math.max(EDGE_MARGIN, vpW - startW - EDGE_MARGIN), Math.round(startX + dx)));
-    const newY = Math.max(EDGE_MARGIN, Math.min(Math.max(EDGE_MARGIN, vpH - startH - EDGE_MARGIN), Math.round(startY + dy)));
+    const newY = Math.max(topM, Math.min(Math.max(topM, vpH - startH - EDGE_MARGIN), Math.round(startY + dy)));
     return { newX, newY, newW: startW, newH: startH, mode, dir, movedDist };
   }
 
@@ -105,9 +107,9 @@ function computePreviewRect(view, p, overridePos = null) {
 
   if (dir.includes("n")) {
     const bottomEdge = Math.min(maxBottom, startY + startH);
-    const maxH = Math.max(minH, bottomEdge - EDGE_MARGIN);
+    const maxH = Math.max(minH, bottomEdge - topM);
     newH = Math.max(minH, Math.min(maxH, Math.round(startH - dy)));
-    newY = Math.max(EDGE_MARGIN, Math.round(bottomEdge - newH));
+    newY = Math.max(topM, Math.round(bottomEdge - newH));
   }
 
   return { newX, newY, newW, newH, mode, dir, movedDist };

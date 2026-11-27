@@ -162,6 +162,7 @@ export default class Orrery extends View {
     this.panDrag = null;
     this.noteDrag = null;
     this.winCardDrag = null;
+    this._wheelGesture = null;
     this.lastEmptyClickMs = 0;
     this.lastEmptyClickPos = null;
     this.lastTitleClickMs = 0;
@@ -754,11 +755,15 @@ export default class Orrery extends View {
             }
           } else if (cmd === "zoom-out") {
             if (role === "universe" && !isFocusMode()) {
-              applyCameraZoomAt(this, -96, Math.round(vp.w / 2), Math.round(vp.h / 2), asyncCx);
+              applyCameraZoomAt(this, -96, Math.round(vp.w / 2), Math.round(vp.h / 2), asyncCx, 0, {
+                forceMode: "zoom",
+              });
             }
           } else if (cmd === "zoom-in") {
             if (role === "universe" && !isFocusMode()) {
-              applyCameraZoomAt(this, 96, Math.round(vp.w / 2), Math.round(vp.h / 2), asyncCx);
+              applyCameraZoomAt(this, 96, Math.round(vp.w / 2), Math.round(vp.h / 2), asyncCx, 0, {
+                forceMode: "zoom",
+              });
             }
           } else if (cmd === "zoom-reset") {
             if (role === "universe" && !isFocusMode()) {

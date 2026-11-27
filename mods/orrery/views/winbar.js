@@ -2,8 +2,7 @@
 // World-synced titlebar:
 //   - Left drag     : World-synced 60fps move via `resizer` (`mode: "move"`) — zero coordinate desync!
 //   - Double-click  : Maximize full-screen Focus Mode (Alt+O)
-//   - Ctrl + Scroll : Scale THIS terminal window smoothly (`55%..160%`); click scale pill to reset 100%
-//   - Plain Scroll  : Zoom the cosmic world in/out right from the titlebar
+//   - Ctrl/Cmd+Scroll : Scale THIS terminal window smoothly (`55%..160%`); click scale pill to reset 100%
 //   - Right-click   : Window menu (Minimize, Pin, Reset Size, Snap, Maximize, Close)
 //   - Right buttons : ─ (minimize) · □ (maximize) · × (close; 3s ×? confirm on active agents)
 
@@ -14,7 +13,6 @@ import {
   agentName,
   cleanAgentName,
   closeAndEndTerminal,
-  dispatchCosmosAction,
   enterFocusMode,
   getViewportDims,
   getWindowDimensions,
@@ -159,22 +157,15 @@ export function renderWinbar(view, _cx) {
           ? withAlpha(t.accent || "#e8a849", "77")
           : withAlpha(t.border || "#1f2b40", "CC")
     )
+    .on_mouse_down("left", stopProp)
+    .on_mouse_down("right", stopProp)
     .on_mouse_down("middle", stopProp)
     .on_scroll_wheel((e, c) => {
       const dy = typeof e?.delta?.y === "number" ? e.delta.y : 0;
-      const dx = typeof e?.delta?.x === "number" ? e.delta.x : 0;
-      if (Math.abs(dy) < 0.01 && Math.abs(dx) < 0.01) return;
+      if (Math.abs(dy) < 0.01) return;
       c.stop_propagation();
       if (e?.modifiers?.control || e?.modifiers?.platform) {
-        if (Math.abs(dy) >= 0.01) scheduleScale(dy, c);
-      } else {
-        dispatchCosmosAction({
-          type: "world-zoom",
-          deltaY: dy,
-          deltaX: dx,
-          x: e?.position?.x,
-          y: e?.position?.y,
-        });
+        scheduleScale(dy, c);
       }
     })
     // Left: world-synced drag handle; double-click maximizes; right-click opens window menu
@@ -188,7 +179,13 @@ export function renderWinbar(view, _cx) {
         .items_center()
         .overflow_hidden()
         .cursor_grab()
-        .tooltip(`drag: move · double-click: maximize · ${modKey.toLowerCase()}+scroll: scale window · scroll: zoom space · right-click: menu`)
+        .tooltip(`drag: move · double-click: maximize · ${modKey.toLowerCase()}+scroll: scale window · right-click: menu`)
+        .on_hover((hovered) => {
+          if (!hovered) view._pendingMove = null;
+        })
+        .on_mouse_down_out(() => {
+          view._pendingMove = null;
+        })
         .on_mouse_down("left", (e, c) => {
           c.stop_propagation();
           if (!addr) return;
@@ -228,11 +225,16 @@ export function renderWinbar(view, _cx) {
             startH: stored.height,
             startMouseX: mx,
             startMouseY: my,
+            startedAt: now,
           };
         })
         .on_mouse_move((e) => {
           const pm = view._pendingMove;
           if (!pm || !e?.position || !addr) return;
+          if (Date.now() - (pm.startedAt || 0) > 900) {
+            view._pendingMove = null;
+            return;
+          }
           if (Math.hypot(e.position.x - pm.startMouseX, e.position.y - pm.startMouseY) < DRAG_THRESHOLD) {
             return;
           }

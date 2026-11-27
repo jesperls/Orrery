@@ -14,12 +14,16 @@
 import { div } from "gpui-kit";
 import { h_flex, v_flex } from "gpui-base";
 import { openOverlay, props, theme } from "herdr";
-import { CLEAR, dispatchCosmosAction, getWindowDimensions, scaleWindowByFactor, withAlpha } from "../state.js";
+import { CLEAR, getWindowDimensions, scaleWindowByFactor, withAlpha } from "../state.js";
 
 const EDGE = 5;
 const CORNER = 14;
 const SIDE_CORNER = 9;
 const BORDER_PX = 1;
+
+function stopProp(_e, cx) {
+  cx.stop_propagation();
+}
 
 function applyResizeCursor(el, dir) {
   if (dir === "nw" || dir === "se") return el.cursor_nwse_resize();
@@ -145,11 +149,9 @@ export function renderEdge(view, _cx) {
 
   const onWheel = (e, c) => {
     const dy = typeof e?.delta?.y === "number" ? e.delta.y : 0;
-    const dx = typeof e?.delta?.x === "number" ? e.delta.x : 0;
-    if (Math.abs(dy) < 0.01 && Math.abs(dx) < 0.01) return;
+    if (Math.abs(dy) < 0.01) return;
     c.stop_propagation();
     if (e?.modifiers?.control || e?.modifiers?.platform) {
-      if (Math.abs(dy) < 0.01) return;
       const clampedDy = Math.max(-160, Math.min(160, dy));
       const step = Math.exp(clampedDy * 0.0018);
       view._pendingScaleFactor = (view._pendingScaleFactor || 1.0) * step;
@@ -173,14 +175,6 @@ export function renderEdge(view, _cx) {
         view._pendingScaleFactor = 1.0;
         scaleWindowByFactor(winKind, targetId, factor, { overlayId });
       }
-    } else {
-      dispatchCosmosAction({
-        type: "world-zoom",
-        deltaY: dy,
-        deltaX: dx,
-        x: e?.position?.x,
-        y: e?.position?.y,
-      });
     }
   };
 
@@ -189,6 +183,9 @@ export function renderEdge(view, _cx) {
       .id(`orrery-edge-top-${winKind}-${targetId || "w"}`)
       .size_full()
       .bg(CLEAR)
+      .on_mouse_down("left", stopProp)
+      .on_mouse_down("right", stopProp)
+      .on_mouse_down("middle", stopProp)
       .on_size_change(onSizeChange)
       .on_scroll_wheel(onWheel)
       .child(makeZone("nw", "nw", "start", true))
@@ -201,6 +198,9 @@ export function renderEdge(view, _cx) {
       .id(`orrery-edge-bot-${winKind}-${targetId || "w"}`)
       .size_full()
       .bg(CLEAR)
+      .on_mouse_down("left", stopProp)
+      .on_mouse_down("right", stopProp)
+      .on_mouse_down("middle", stopProp)
       .on_size_change(onSizeChange)
       .on_scroll_wheel(onWheel)
       .child(makeZone("sw", "sw", "start", true))
@@ -213,6 +213,9 @@ export function renderEdge(view, _cx) {
       .id(`orrery-edge-left-${winKind}-${targetId || "w"}`)
       .size_full()
       .bg(CLEAR)
+      .on_mouse_down("left", stopProp)
+      .on_mouse_down("right", stopProp)
+      .on_mouse_down("middle", stopProp)
       .on_size_change(onSizeChange)
       .on_scroll_wheel(onWheel)
       .child(makeZone("nw", "nw", "start", false))
@@ -225,6 +228,9 @@ export function renderEdge(view, _cx) {
     .id(`orrery-edge-right-${winKind}-${targetId || "w"}`)
     .size_full()
     .bg(CLEAR)
+    .on_mouse_down("left", stopProp)
+    .on_mouse_down("right", stopProp)
+    .on_mouse_down("middle", stopProp)
     .on_size_change(onSizeChange)
     .on_scroll_wheel(onWheel)
     .child(makeZone("ne", "ne", "start", false))

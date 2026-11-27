@@ -19,10 +19,12 @@ import {
   run,
   setAgentOrder,
   setShared,
+  settings,
   shared,
   spaces,
   terminals,
   theme,
+  window as win,
 } from "herdr";
 
 export const MONO = "JetBrains Mono";
@@ -454,8 +456,17 @@ export function readCamResetSeq() {
 export function clampZoom(z, snapToOne = true) {
   if (typeof z !== "number" || !Number.isFinite(z)) return 1.0;
   const clamped = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, z));
-  if (snapToOne && Math.abs(clamped - 1.0) < 0.022) return 1.0;
-  return Math.round(clamped * 1000) / 1000;
+  if (snapToOne && Math.abs(clamped - 1.0) < 0.015) return 1.0;
+  return Math.round(clamped * 10000) / 10000;
+}
+
+export function getTopSafeMargin() {
+  const w = win?.();
+  if (w?.platform === "macos" && w?.titlebar === "none" && !w?.fullscreen) {
+    const uiZoom = Number(settings?.()?.zoom) || 1;
+    return Math.max(28, Math.round(34 / Math.max(0.5, uiZoom)));
+  }
+  return 8;
 }
 
 // Vast unified world-space cosmic bounds centered around home `[0..vpW, 0..vpH]`.
@@ -1263,6 +1274,21 @@ export function clearWindowOverlayIfMatch(winKind, targetId, overlayId) {
 // Reconcile persisted shared() overlay IDs once on fresh universe mount (restart / layout switch)
 export function reconcileOverlaysOnMount(vpW, vpH, cam) {
   if (isFocusMode()) return;
+
+  // Explicitly close any still-live overlays before wiping IDs so remounts never orphan duplicate windows
+  const safeClose = (id) => {
+    if (typeof id === "string" && id) {
+      try {
+        closeOverlay(id);
+      } catch (_err) {
+        // Ignore already-closed overlay
+      }
+    }
+  };
+  safeClose(readMenuBtnState().overlayId);
+  safeClose(readLauncherState().overlayId);
+  safeClose(shared(CTX_POPUP_KEY));
+
   setShared(MENU_BTN_KEY, { overlayId: "", y: -1 });
   setShared(LAUNCHER_POPUP_KEY, { overlayId: "", closedAt: 0 });
   setShared(CTX_POPUP_KEY, "");
@@ -1271,6 +1297,7 @@ export function reconcileOverlaysOnMount(vpW, vpH, cam) {
   let winsChanged = false;
   for (const [addr, rec] of Object.entries(wins)) {
     if (rec?.overlayId) {
+      safeClose(rec.overlayId);
       wins[addr] = { ...rec, overlayId: "", suspended: true };
       winsChanged = true;
     }
@@ -1281,6 +1308,7 @@ export function reconcileOverlaysOnMount(vpW, vpH, cam) {
   let toolsChanged = false;
   for (const [kind, rec] of Object.entries(tools)) {
     if (rec?.overlayId) {
+      safeClose(rec.overlayId);
       tools[kind] = { ...rec, overlayId: "", suspended: !rec.minimized };
       toolsChanged = true;
     }
@@ -1291,6 +1319,7 @@ export function reconcileOverlaysOnMount(vpW, vpH, cam) {
   let notesChanged = false;
   for (const [nid, rec] of Object.entries(notes)) {
     if (rec?.overlayId) {
+      safeClose(rec.overlayId);
       notes[nid] = { ...rec, overlayId: "", suspended: !rec.minimized };
       notesChanged = true;
     }
@@ -1303,14 +1332,15 @@ export function reconcileOverlaysOnMount(vpW, vpH, cam) {
 }
 
 function clampWindowRect(x, y, width, height, vpW, vpH, minW = 280, minH = 200) {
+  const topM = getTopSafeMargin();
   const maxW = Math.max(minW, vpW - 16);
-  const maxH = Math.max(minH, vpH - 16);
+  const maxH = Math.max(minH, vpH - topM - 8);
   const cw = Math.max(minW, Math.min(maxW, Math.round(width)));
   const ch = Math.max(minH, Math.min(maxH, Math.round(height)));
   const maxX = Math.max(8, vpW - cw - 8);
-  const maxY = Math.max(8, vpH - ch - 8);
+  const maxY = Math.max(topM, vpH - ch - 8);
   const cx = Math.max(8, Math.min(maxX, Math.round(x)));
-  const cy = Math.max(8, Math.min(maxY, Math.round(y)));
+  const cy = Math.max(topM, Math.min(maxY, Math.round(y)));
   return { x: cx, y: cy, width: cw, height: ch };
 }
 
@@ -1318,8 +1348,9 @@ export function computeTileGeometry(tile, vpW, vpH, custom = null) {
   const w = Math.max(640, Math.round(vpW || getViewportDims().w || 1600));
   const h = Math.max(420, Math.round(vpH || getViewportDims().h || 1000));
   const margin = 16;
+  const topM = Math.max(margin, getTopSafeMargin());
   const gap = 12;
-  const fullH = Math.max(260, h - 32);
+  const fullH = Math.max(260, h - topM - margin);
 
   if (
     custom &&
@@ -1337,23 +1368,23 @@ export function computeTileGeometry(tile, vpW, vpH, custom = null) {
 
   if (tile === "left") {
     const availW = w - margin * 2 - gap;
-    const rect = clampWindowRect(margin, margin, Math.max(360, Math.floor(availW / 2)), fullH, w, h, 300, 200);
+    const rect = clampWindowRect(margin, topM, Math.max(360, Math.floor(availW / 2)), fullH, w, h, 300, 200);
     return { tileMode: "left", ...rect };
   }
 
   if (tile === "right-half") {
     const availW = w - margin * 2 - gap;
     const leftW = Math.floor(availW / 2);
-    const rect = clampWindowRect(margin + leftW + gap, margin, Math.max(360, availW - leftW), fullH, w, h, 300, 200);
+    const rect = clampWindowRect(margin + leftW + gap, topM, Math.max(360, availW - leftW), fullH, w, h, 300, 200);
     return { tileMode: "right-half", ...rect };
   }
 
   if (tile === "center") {
     const rect = clampWindowRect(
       Math.round(w * 0.16),
-      20,
+      Math.max(20, topM),
       Math.max(440, Math.round(w * 0.68)),
-      Math.max(260, h - 44),
+      Math.max(260, h - topM - 24),
       w,
       h,
       300,
@@ -1365,7 +1396,7 @@ export function computeTileGeometry(tile, vpW, vpH, custom = null) {
   // Default single-window "right": sleek spacious viewport leaving left cosmos planetoids open.
   const rect = clampWindowRect(
     Math.round(w * 0.42),
-    margin,
+    topM,
     Math.max(400, Math.round(w * 0.565)),
     fullH,
     w,
@@ -1439,10 +1470,11 @@ function openTerminalWindowDirect(addr, opts = {}) {
     rawX = geom.x;
     rawY = geom.y;
   } else if (prev && !opts.at) {
+    const topM = getTopSafeMargin();
     const projX = Math.round(prev.wx * z + cam.camX);
     const projY = Math.round(prev.wy * z + cam.camY);
-    const projW = Math.max(220, Math.round(prev.width * z));
-    const projH = Math.max(140, Math.round(prev.height * z));
+    const projW = Math.min(Math.max(220, vpW - 16), Math.max(220, Math.round(prev.width * z)));
+    const projH = Math.min(Math.max(140, vpH - topM - 8), Math.max(140, Math.round(prev.height * z)));
     // Never teleport an already-placed window out of another sector onto the current screen!
     if (!fitsCleanlyInView(projX, projY, projW, projH, vpW, vpH) && !opts.allowTeleport) {
       if (!opts.skipFocus) {
@@ -1509,10 +1541,9 @@ function openTerminalWindowDirect(addr, opts = {}) {
 
   let overlayKey = prev?.key || `orrery-term-${addr}`;
   if (forceMove || !prev || !prev.overlayId) {
-    const prevId = prev?.overlayId || opts.overlayId || null;
-    if (prevId) {
+    for (const oldId of new Set([prev?.overlayId, opts.overlayId].filter(Boolean))) {
       try {
-        closeOverlay(prevId);
+        closeOverlay(oldId);
       } catch (_err) {
         // Ignore already-closed overlay
       }
@@ -1639,8 +1670,9 @@ export function tileAllOpenWindows(vpW, vpH, opts = {}) {
   const focusAddr = prevFocused && ordered.includes(prevFocused) ? prevFocused : ordered[0];
 
   const margin = 16;
+  const topM = Math.max(margin, getTopSafeMargin());
   const gap = 12;
-  const usableH = Math.max(260, h - margin * 2);
+  const usableH = Math.max(260, h - topM - margin);
   const placeCell = (addr, x, y, cellW, cellH, tileMode) =>
     openTerminalWindowDirect(addr, {
       vpW: w,
@@ -1664,26 +1696,26 @@ export function tileAllOpenWindows(vpW, vpH, opts = {}) {
   if (ordered.length === 1) {
     const winW = Math.max(400, Math.round(w * 0.56));
     const winX = Math.max(margin, Math.round(w * 0.42));
-    placeCell(ordered[0], winX, margin, Math.min(winW, w - winX - margin), usableH, "right");
+    placeCell(ordered[0], winX, topM, Math.min(winW, w - winX - margin), usableH, "right");
   } else if (ordered.length === 2) {
     const availW = w - margin * 2 - gap;
     const leftW = Math.floor(availW / 2);
     const rightW = availW - leftW;
-    placeCell(ordered[0], margin, margin, leftW, usableH, "left");
-    placeCell(ordered[1], margin + leftW + gap, margin, rightW, usableH, "right-half");
+    placeCell(ordered[0], margin, topM, leftW, usableH, "left");
+    placeCell(ordered[1], margin + leftW + gap, topM, rightW, usableH, "right-half");
   } else if (ordered.length === 3) {
     const availW = w - margin * 2 - gap;
     const leftW = Math.round(availW * 0.52);
     const rightW = availW - leftW;
     const topH = Math.floor((usableH - gap) / 2);
     const botH = usableH - gap - topH;
-    placeCell(ordered[0], margin, margin, leftW, usableH, "left");
-    placeCell(ordered[1], margin + leftW + gap, margin, rightW, topH, "custom");
-    placeCell(ordered[2], margin + leftW + gap, margin + topH + gap, rightW, botH, "custom");
+    placeCell(ordered[0], margin, topM, leftW, usableH, "left");
+    placeCell(ordered[1], margin + leftW + gap, topM, rightW, topH, "custom");
+    placeCell(ordered[2], margin + leftW + gap, topM + topH + gap, rightW, botH, "custom");
   } else {
     // 4+ open windows: dynamic NxM balanced grid that never overflows viewport height
     const totalW = Math.max(480, w - margin * 2);
-    const totalH = Math.max(280, h - margin * 2);
+    const totalH = Math.max(280, usableH);
     const cols = Math.max(2, Math.ceil(Math.sqrt(ordered.length)));
     const rows = Math.ceil(ordered.length / cols);
     const colW = Math.max(220, Math.floor((totalW - gap * (cols - 1)) / cols));
@@ -1693,7 +1725,7 @@ export function tileAllOpenWindows(vpW, vpH, opts = {}) {
       const col = i % cols;
       const row = Math.floor(i / cols);
       const x = margin + col * (colW + gap);
-      const y = margin + row * (rowH + gap);
+      const y = topM + row * (rowH + gap);
       const cellW = col === cols - 1 ? Math.max(220, totalW - col * (colW + gap)) : colW;
       const cellH = row === rows - 1 ? Math.max(140, totalH - row * (rowH + gap)) : rowH;
       placeCell(ordered[i], x, y, cellW, cellH, "custom");
@@ -2653,7 +2685,11 @@ export function syncLiveOverlaysToCamera(cam, vpW, vpH, opts = {}) {
     return;
   }
 
-  // 1. Terminals (clamp margin = 8px matching clampWindowRect; batch suspend writes; mount focused last so it raises on top!)
+  const topM = getTopSafeMargin();
+  const maxWinW = Math.max(220, w - 16);
+  const maxWinH = Math.max(140, h - topM - 8);
+
+  // 1. Terminals (clamp to safe viewport so windows from larger displays never get trapped suspended!)
   const openWins = pruneOpenWindows();
   const suspendedTermAddrs = [];
   const winEntries = Object.entries(openWins).sort(([a], [b]) =>
@@ -2662,12 +2698,12 @@ export function syncLiveOverlaysToCamera(cam, vpW, vpH, opts = {}) {
   for (const [addr, rec] of winEntries) {
     const sx = Math.round(rec.wx * z + c.camX);
     const sy = Math.round(rec.wy * z + c.camY);
-    const sw = Math.max(220, Math.round(rec.width * z));
-    const sh = Math.max(140, Math.round(rec.height * z));
+    const sw = Math.min(maxWinW, Math.max(220, Math.round(rec.width * z)));
+    const sh = Math.min(maxWinH, Math.max(140, Math.round(rec.height * z)));
 
     if (fitsCleanlyInView(sx, sy, sw, sh, w, h)) {
       const targetX = Math.max(8, Math.min(Math.max(8, w - sw - 8), sx));
-      const targetY = Math.max(8, Math.min(Math.max(8, h - sh - 8), sy));
+      const targetY = Math.max(topM, Math.min(Math.max(topM, h - sh - 8), sy));
       const alreadySame =
         Boolean(rec.overlayId) &&
         !rec.suspended &&
@@ -2687,8 +2723,8 @@ export function syncLiveOverlaysToCamera(cam, vpW, vpH, opts = {}) {
         height: sh,
         wx: rec.wx,
         wy: rec.wy,
-        worldW: rec.width,
-        worldH: rec.height,
+        worldW: Math.min(rec.width, maxWinW),
+        worldH: Math.min(rec.height, maxWinH),
         baseW: rec.baseW,
         baseH: rec.baseH,
         scale: rec.scale,
@@ -2722,12 +2758,12 @@ export function syncLiveOverlaysToCamera(cam, vpW, vpH, opts = {}) {
     if (rec.minimized) continue;
     const sx = Math.round(rec.wx * z + c.camX);
     const sy = Math.round(rec.wy * z + c.camY);
-    const sw = Math.max(220, Math.round(rec.width * z));
-    const sh = Math.max(140, Math.round(rec.height * z));
+    const sw = Math.min(maxWinW, Math.max(220, Math.round(rec.width * z)));
+    const sh = Math.min(maxWinH, Math.max(140, Math.round(rec.height * z)));
 
     if (fitsCleanlyInView(sx, sy, sw, sh, w, h)) {
       const targetX = Math.max(8, Math.min(Math.max(8, w - sw - 8), sx));
-      const targetY = Math.max(8, Math.min(Math.max(8, h - sh - 8), sy));
+      const targetY = Math.max(topM, Math.min(Math.max(topM, h - sh - 8), sy));
       const alreadySame =
         Boolean(rec.overlayId) &&
         !rec.suspended &&
@@ -2745,8 +2781,8 @@ export function syncLiveOverlaysToCamera(cam, vpW, vpH, opts = {}) {
         height: sh,
         wx: rec.wx,
         wy: rec.wy,
-        worldW: rec.width,
-        worldH: rec.height,
+        worldW: Math.min(rec.width, maxWinW),
+        worldH: Math.min(rec.height, maxWinH),
         baseW: rec.baseW,
         baseH: rec.baseH,
         scale: rec.scale,
@@ -2777,12 +2813,12 @@ export function syncLiveOverlaysToCamera(cam, vpW, vpH, opts = {}) {
     if (rec.minimized) continue;
     const sx = Math.round(rec.wx * z + c.camX);
     const sy = Math.round(rec.wy * z + c.camY);
-    const sw = Math.max(200, Math.round(rec.width * z));
-    const sh = Math.max(130, Math.round(rec.height * z));
+    const sw = Math.min(maxWinW, Math.max(200, Math.round(rec.width * z)));
+    const sh = Math.min(maxWinH, Math.max(130, Math.round(rec.height * z)));
 
     if (fitsCleanlyInView(sx, sy, sw, sh, w, h)) {
       const targetX = Math.max(8, Math.min(Math.max(8, w - sw - 8), sx));
-      const targetY = Math.max(8, Math.min(Math.max(8, h - sh - 8), sy));
+      const targetY = Math.max(topM, Math.min(Math.max(topM, h - sh - 8), sy));
       const alreadySame =
         Boolean(rec.overlayId) &&
         !rec.suspended &&
@@ -2802,8 +2838,8 @@ export function syncLiveOverlaysToCamera(cam, vpW, vpH, opts = {}) {
         height: sh,
         wx: rec.wx,
         wy: rec.wy,
-        worldW: rec.width,
-        worldH: rec.height,
+        worldW: Math.min(rec.width, maxWinW),
+        worldH: Math.min(rec.height, maxWinH),
         baseW: rec.baseW,
         baseH: rec.baseH,
         scale: rec.scale,

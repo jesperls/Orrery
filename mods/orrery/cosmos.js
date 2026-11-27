@@ -4221,15 +4221,18 @@ export function renderCosmos({
     children.push(renderNoteObject(note, nIdx, fgX, fgY, pal, handlers, draggingNoteId, z));
   }
 
-  // LAYER 5 (1.00x * zoom): Scaled World-Space Window Objects (suspended during zoom-out, pan, or off-edge)
+  // LAYER 5 (1.00x * zoom): Scaled World-Space Window Objects (only when suspended/zoomed/dragging —
+  // never duplicate a fake canvas card behind an already-live native overlay!)
   for (const winObj of worldWinList) {
     const wKey = `${winObj.kind}:${winObj.id}`;
     const isDragging = draggingWinKey === wKey;
-    const useLive = Boolean(winObj.isLiveMounted) && !isDragging && typeof winObj.liveX === "number";
-    const sx = useLive ? winObj.liveX : (winObj.wx || 0) * z + fgX;
-    const sy = useLive ? winObj.liveY : (winObj.wy || 0) * z + fgY;
-    const sw = useLive ? Math.max(84, winObj.liveW) : Math.max(84, (winObj.width || 600) * z);
-    const sh = useLive ? Math.max(54, winObj.liveH) : Math.max(54, (winObj.height || 400) * z);
+    if (winObj.isLiveMounted && !isDragging) {
+      continue;
+    }
+    const sx = (winObj.wx || 0) * z + fgX;
+    const sy = (winObj.wy || 0) * z + fgY;
+    const sw = Math.max(84, (winObj.width || 600) * z);
+    const sh = Math.max(54, (winObj.height || 400) * z);
     if (!isDragging && (sx + sw < -40 || sx > width + 40 || sy + sh < -40 || sy > height + 40)) {
       continue;
     }

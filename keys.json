@@ -14,6 +14,13 @@
     "alt-up": "agent.prev",
     "alt-down": "agent.next",
     "ctrl-shift-g": "orrery.open-changes",
-    "cmd-shift-g": "orrery.open-changes"
+    "cmd-shift-space": "orrery.toggle-launcher",
+    "cmd-shift-m": "orrery.minimize-all",
+    "cmd-shift-u": "orrery.toggle-mode",
+    "cmd-shift-f": "orrery.open-fleet",
+    "cmd-shift-g": "orrery.open-changes",
+    "cmd-shift--": "orrery.zoom-out",
+    "cmd-shift-=": "orrery.zoom-in",
+    "cmd-shift-0": "orrery.zoom-reset"
   }
 }
